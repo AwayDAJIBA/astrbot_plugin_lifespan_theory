@@ -166,6 +166,94 @@ def is_birthday(birth: date, today: date) -> bool:
     return birth.month == 2 and birth.day == 29 and (today.month, today.day) == (3, 1)
 
 
+# ==================================================================== 人设年龄体检
+# 设计目标：把一个「写死年龄/固定口吻」的人设提示词体检出来，给可执行的修改建议。
+# 只做启发式提示，不自动改人设；命中结果按「age / tone / age-ok」分类。
+
+_AGE_NUM = r"(?:\d{1,3}|[零一二三四五六七八九十百]{1,4})"
+_AGE_PATTERNS = (
+    re.compile(rf"{_AGE_NUM}\s*岁"),
+    re.compile(rf"年龄\s*[：:是为]?\s*{_AGE_NUM}"),
+    re.compile(rf"(?:永远|一直|始终|不许|不准|不会|别)\s*(?:是|长到|变)\s*{_AGE_NUM}\s*岁"),
+)
+_TONE_PATTERNS = (
+    re.compile(r"(?:永远|一直|始终)[^。\n]{0,12}(?:语气|口吻|语调|撒娇|稚嫩|孩子气)"),
+    re.compile(r"(?:稚嫩|幼态|幼齿|长不大)"),
+    re.compile(r"(?:一成不变|千篇一律)[^。\n]{0,12}(?:语气|口吻|说话)"),
+    re.compile(r"(?:不许|不准|不要|别|不会|永远不)\s*(?:长大|长高|变老|变懂事|成熟)"),
+)
+_AGE_OK_HINTS = ("起点", "基准", "由插件", "生日现算", "按生日", "现算")
+
+
+def lint_persona_style(prompt: str) -> dict:
+    """体检人格提示词里与「年龄随插件变化」冲突的写法。
+
+    返回 {"findings": [...], "age_count": int, "tone_count": int, "count": int}。
+    每条 finding: {"kind": "age"|"age-ok"|"tone", "match": 命中原文, "context": 上下文, "hint": 建议}。
+    """
+    text = str(prompt or "")
+    findings: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _add(kind: str, match: str, hint: str, at: int) -> None:
+        key = (kind, match)
+        if key in seen:
+            return
+        seen.add(key)
+        ctx = text[max(0, at - 24) : at + len(match) + 24].replace("\n", " ")
+        findings.append(
+            {"kind": kind, "match": match, "context": ctx, "hint": hint}
+        )
+
+    hint_age = (
+        "人设里写死了年龄，会和插件注入的当前年龄冲突：改成「起点 N 岁（由插件按生日现算，"
+        "会随年龄增长）」，或删掉年龄只保留生日。"
+    )
+    hint_ok = (
+        "这处看起来是「起点年龄」写法，可以保留；确认一下插件确实按生日现算即可。"
+    )
+    for pattern in _AGE_PATTERNS:
+        for m in pattern.finditer(text):
+            frag = m.group(0).strip()
+            ctx = text[max(0, m.start() - 24) : m.end() + 24]
+            if any(k in ctx for k in _AGE_OK_HINTS):
+                _add("age-ok", frag, hint_ok, m.start())
+            else:
+                _add("age", frag, hint_age, m.start())
+
+    hint_tone = (
+        "固定口吻/不许长大这类写法会和年龄档生成的风格打架：人设只保留性格内核"
+        "（傲娇/毒舌/嘴硬心软等），把「随年龄变化的说话方式」交给插件生成。"
+    )
+    # 多个 tone 规则可能命中同一句话（如「永远用稚嫩的语气」+「稚嫩」）：
+    # 先收集位置，重叠的只保留最长命中，避免体检结果刷屏。
+    tone_spans: list[tuple[int, int, str]] = []
+    for pattern in _TONE_PATTERNS:
+        for m in pattern.finditer(text):
+            frag = m.group(0).strip()
+            if frag:
+                tone_spans.append((m.start(), m.end(), frag))
+    tone_spans.sort()
+    merged: list[tuple[int, int, str]] = []
+    for start, end, frag in tone_spans:
+        if merged and start <= merged[-1][1]:
+            if (end - start) > (merged[-1][1] - merged[-1][0]):
+                merged[-1] = (start, end, frag)
+        else:
+            merged.append((start, end, frag))
+    for start, _, frag in merged:
+        _add("tone", frag, hint_tone, start)
+
+    age_count = sum(1 for f in findings if f["kind"] == "age")
+    tone_count = sum(1 for f in findings if f["kind"] == "tone")
+    return {
+        "findings": findings,
+        "age_count": age_count,
+        "tone_count": tone_count,
+        "count": len(findings),
+    }
+
+
 # ==================================================================== 档位
 _FALLBACK_PROFILE = {
     "base_age": 14,
@@ -622,6 +710,17 @@ def self_check() -> str:
         base_age=14,
     )
     assert "说话的口吻：" + tier["tone"] in fallback_block
+    # 人设年龄体检（v0.1.3）
+    lint = lint_persona_style("你是14岁美少女，永远用稚嫩的语气撒娇，不许长大。")
+    kinds = {f["kind"] for f in lint["findings"]}
+    assert "age" in kinds, lint
+    assert "tone" in kinds, lint
+    clean = lint_persona_style("性格傲娇毒舌、嘴硬心软；生日 2 月 8 日；年龄由插件按生日现算。")
+    assert [f for f in clean["findings"] if f["kind"] in {"age", "tone"}] == [], clean
+    ok_start = lint_persona_style("起点 14 岁（由插件按生日现算，会随年龄增长）。")
+    assert [f for f in ok_start["findings"] if f["kind"] == "age"] == [], ok_start
+    assert "age-ok" in {f["kind"] for f in ok_start["findings"]}, ok_start
+
     return "ok"
 
 

@@ -92,7 +92,7 @@ provider 的报错正文可能回显请求片段，而请求里含人格提示�
     PLUGIN_NAME,
     "Dejiko",
     "按生日现算角色年龄；年龄进入新档时用 LLM 把人格提示词与年龄综合成说话方式注入上下文，让人设随年龄自然生长。",
-    "0.1.2",
+    "0.1.3",
 )
 class LifespanTheoryPlugin(Star):
     def __init__(self, context: Context, config: dict | None = None):
@@ -894,6 +894,12 @@ class LifespanTheoryPlugin(Star):
             return "", ""
         return rest[0].strip().lower(), " ".join(rest[1:]).strip()
 
+    def _is_private(self, event) -> bool:
+        try:
+            return bool(event.is_private_chat())
+        except Exception:  # noqa: BLE001
+            return True
+
     def _require_admin(self, event) -> bool:
         try:
             return bool(event.is_admin())
@@ -922,6 +928,15 @@ class LifespanTheoryPlugin(Star):
             return
         if sub == "tiers":
             yield event.plain_result(await self._cmd_tiers(event))
+            return
+        if sub in {"lint", "体检"}:
+            yield event.plain_result(await self._cmd_lint(event))
+            return
+        if sub in {"preview", "预览"}:
+            yield event.plain_result(await self._cmd_preview(event, arg))
+            return
+        if sub in {"compare", "对比"}:
+            yield event.plain_result(await self._cmd_compare(event, arg))
             return
         if sub in {"prompt", "提示词"}:
             yield event.plain_result(await self._cmd_prompt(event))
@@ -1011,6 +1026,89 @@ class LifespanTheoryPlugin(Star):
             current = " ← 当前" if info is not None and tier is info["tier"] else ""
             lines.append(f"{mark} {span} · {tier.get('label', '')}{current}")
         return "\n".join(lines)
+
+    async def _style_and_tier_for_age(self, event, age: int):
+        """(style|None, tier, persona_id, age)。只查缓存：不调 LLM、不写状态。"""
+        age = max(0, min(int(age), 150))
+        tier = pick_tier(self._profiles(), age)
+        persona_id, persona_prompt = await self._resolve_persona(event)
+        style = None
+        if persona_prompt:
+            prompt_h = self._persona_key(persona_id, persona_prompt)
+            style = self._cached_style(cache_key(persona_id or "", tier, prompt_h))
+        return style, tier, persona_id, age
+
+    async def _cmd_lint(self, event) -> str:
+        if not self._require_admin(event):
+            return "只有管理员能做人设体检喵（会读取人格提示词）。"
+        persona_id, persona_prompt = await self._resolve_persona(event)
+        if not persona_prompt:
+            return "没取到人格提示词，没法体检。先用 /age prompt 排查 persona_id / prompt_override。"
+        report = core.lint_persona_style(persona_prompt)
+        info = self._resolve_info()
+        head = (
+            f"人设年龄体检 · 人格：{persona_id or '未知（prompt_override）'} · "
+            f"提示词 {len(persona_prompt)} 字\n"
+        )
+        if info:
+            head += (
+                f"当前：{info['age']} 岁 / {tier_key(info['tier'])} 档；"
+                f"memory_note={'开' if bool(self._cfg('memory_note', True)) else '关'}\n"
+            )
+        findings = report.get("findings") or []
+        if not findings:
+            return head + "✅ 没发现写死的年龄或固定口吻，人设与插件不冲突喵。"
+        if not self._is_private(event):
+            return (
+                head
+                + f"发现 {len(findings)} 处疑似冲突；人设原文不适合在群里展开，"
+                "请私聊我发 /age lint 看详情喵。"
+            )
+        lines = [head, f"发现 {len(findings)} 处疑似冲突："]
+        for index, item in enumerate(findings, 1):
+            lines.append("")
+            lines.append(f"{index}. [{item['kind']}] 命中「{item['match']}」")
+            lines.append(f"   上下文：…{item['context']}…")
+            lines.append(f"   建议：{item['hint']}")
+        lines.append("")
+        lines.append("（体检只给建议，不会自动改人格；改完人设后生成缓存会自动失效。）")
+        return "\n".join(lines)
+
+    async def _cmd_preview(self, event, arg: str) -> str:
+        info = self._resolve_info()
+        if info is None:
+            return "生日配置解析不了，没法预览喵。"
+        arg = (arg or "").strip()
+        if arg and not arg.isdigit():
+            return "用法：/age preview <年龄>（例如 /age preview 24）；不带参数预览当前年龄。"
+        age = int(arg) if arg else info["age"]
+        style, tier, _, age = await self._style_and_tier_for_age(event, age)
+        preview_info = {**info, "age": age, "tier": tier, "manual": False}
+        text = self._render_block(preview_info, style, pending=style is None)
+        header = (
+            f"预览 {age} 岁（{tier_key(tier)} · {tier.get('label', '')}）：\n"
+            + ("" if style else "（该档还没有生成内容，下面是手写兜底文案；不会触发生成）\n")
+            + "（只是预览，不会注入到对话）\n"
+        )
+        return header + text
+
+    async def _cmd_compare(self, event, arg: str) -> str:
+        parts = (arg or "").replace("，", " ").replace(",", " ").split()
+        if len(parts) < 2 or not all(p.isdigit() for p in parts[:2]):
+            return "用法：/age compare <年龄A> <年龄B>（例如 /age compare 14 60）"
+        ages = [max(0, min(int(p), 150)) for p in parts[:2]]
+        blocks = []
+        for age in ages:
+            style, tier, _, _ = await self._style_and_tier_for_age(event, age)
+            lines = core.render_style_lines(style, tier)
+            blocks.append((age, tier, style, lines))
+        out = [f"年龄对比：{ages[0]} 岁 ↔ {ages[1]} 岁（只查缓存，不调模型、不注入）"]
+        for age, tier, style, lines in blocks:
+            mark = "" if style else "（手写兜底）"
+            out.append("")
+            out.append(f"【{age} 岁 · {tier_key(tier)} · {tier.get('label', '')}】{mark}")
+            out.extend(lines or ["（这一档没有可用的风格文案）"])
+        return "\n".join(out)
 
     async def _cmd_prompt(self, event) -> str:
         if not self._require_admin(event):
@@ -1196,6 +1294,9 @@ class LifespanTheoryPlugin(Star):
             "/age 或 /寿命论 — 当前年龄、档位、生成状态\n"
             "/age show — 预览本轮注入的原文\n"
             "/age tiers — 年龄档一览与生成进度\n"
+            "/age lint — 人设年龄体检：扫描写死的年龄/固定口吻并给建议（管理员，详情仅私聊）\n"
+            "/age preview [年龄] — 预览某个年龄会注入的原文（不调模型、不注入）\n"
+            "/age compare <年龄A> <年龄B> — 并排对比两个年龄的说话方式\n"
             "/age prompt — 看当前用的 AstrBot 人格提示词（管理员）\n"
             "/age gen [current|next|<年龄>|all|wait] — 重新生成风格文案（管理员）\n"
             "/age clear — 清空生成缓存（管理员）\n"
