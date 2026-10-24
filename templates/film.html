@@ -1,0 +1,287 @@
+{# theme-title: 胶片暗色 #}
+{# theme-desc: 暗房、胶片孔与金色字幕，把一年剪成一部只有她出镜的短片。 #}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="report-entries" content="{{ entries | length }}">
+<meta name="report-version" content="1">
+<title>{{ title }} · 年报</title>
+<style>
+  :root {
+    --bg: #141619;
+    --bg-2: #101113;
+    --panel: #1c1f23;
+    --ink: #ebe6da;
+    --dim: #b9b3a5;
+    --muted: #807c72;
+    --line: #2c3036;
+    --gold: #d9b166;
+    --gold-soft: rgba(217, 177, 102, .16);
+    --serif: "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", "SimSun", serif;
+    --sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    --mono: "SFMono-Regular", "Consolas", "Courier New", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  .report {
+    width: 900px; margin: 0 auto;
+    padding: 0 64px 88px;
+    background:
+      radial-gradient(1200px 520px at 50% -6%, rgba(217, 177, 102, .07), transparent 70%),
+      radial-gradient(900px 420px at 50% 108%, rgba(217, 177, 102, .05), transparent 70%),
+      var(--bg);
+  }
+  .report-block { margin: 0 0 50px; }
+  .report-block:last-child { margin-bottom: 0; }
+  .mono { font-family: var(--mono); }
+
+  /* ---------- 胶片孔 ---------- */
+  .perfs {
+    height: 26px;
+    background-image: repeating-linear-gradient(90deg,
+      transparent 0 14px,
+      rgba(0, 0, 0, .55) 14px 22px,
+      transparent 22px 36px);
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    opacity: .8;
+  }
+
+  /* ---------- 封面 ---------- */
+  .cover { padding-top: 46px; }
+  .cover-bar { display: flex; justify-content: space-between; align-items: center; font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .32em; }
+  .cover-year-ghost {
+    font-family: var(--serif); font-size: 188px; line-height: .9; letter-spacing: .02em;
+    color: rgba(235, 230, 218, .05); margin: 6px 0 -74px -6px; font-weight: 600;
+  }
+  .cover-title { position: relative; font-family: var(--serif); font-size: 58px; font-weight: 600; line-height: 1.22; margin: 0 0 16px; letter-spacing: .04em; }
+  .cover-sub { position: relative; font-size: 18px; color: var(--dim); margin: 0 0 34px; letter-spacing: .04em; }
+  .cover-meta { position: relative; display: flex; align-items: flex-end; justify-content: space-between; gap: 26px; border-top: 1px solid var(--line); padding-top: 26px; }
+  .cover-age { display: flex; align-items: baseline; gap: 10px; }
+  .cover-age .n { font-family: var(--serif); font-size: 92px; line-height: .9; color: var(--gold); letter-spacing: -.02em; }
+  .cover-age .u { font-family: var(--mono); font-size: 12px; color: var(--muted); letter-spacing: .3em; }
+  .cover-facts { text-align: right; }
+  .cover-facts .bday { font-size: 15px; color: var(--dim); margin: 0 0 8px; }
+  .cover-facts .date { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: .18em; }
+  .cover-quote { position: relative; margin: 30px 0 0; padding: 18px 0 0; border-top: 1px dashed var(--line); font-family: var(--serif); font-size: 17px; color: var(--dim); font-style: italic; letter-spacing: .06em; }
+
+  /* ---------- 开场 ---------- */
+  .lead { font-family: var(--serif); font-size: 21px; line-height: 2.05; margin: 0; color: var(--ink); }
+  .lead::first-line { letter-spacing: .04em; }
+
+  /* ---------- 数字 ---------- */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .stat { padding: 24px 10px 22px; text-align: center; }
+  .stat + .stat { border-left: 1px solid var(--line); }
+  .stat b { display: block; font-family: var(--serif); font-size: 38px; font-weight: 600; color: var(--gold); line-height: 1.1; }
+  .stat span { display: block; margin-top: 8px; font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .24em; }
+
+  /* ---------- 月份条 ---------- */
+  .sect-label { display: flex; align-items: center; gap: 14px; font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .3em; margin-bottom: 16px; }
+  .sect-label::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .strip { display: grid; grid-template-columns: repeat(12, 1fr); gap: 6px; }
+  .frame-cell { border: 1px solid var(--line); background: var(--panel); padding: 8px 3px 6px; text-align: center; }
+  .frame-cell em { display: block; font-style: normal; font-family: var(--mono); font-size: 14px; color: var(--ink); }
+  .frame-cell i { display: block; font-style: normal; font-family: var(--mono); font-size: 9px; color: var(--muted); margin-top: 5px; }
+  .l1 { border-color: rgba(217, 177, 102, .22); }
+  .l2 { border-color: rgba(217, 177, 102, .38); background: #202218; }
+  .l3 { border-color: rgba(217, 177, 102, .58); background: #26261a; }
+  .l4 { border-color: var(--gold); background: var(--gold-soft); }
+  .l4 em, .l3 em { color: var(--gold); }
+
+  /* ---------- 正文段 ---------- */
+  .scene { display: flex; gap: 28px; }
+  .scene-no { flex: none; width: 64px; font-family: var(--mono); font-size: 10px; color: var(--gold); letter-spacing: .18em; padding-top: 9px; }
+  .scene-main { flex: 1; }
+  .scene h2 { font-family: var(--serif); font-size: 26px; font-weight: 600; margin: 0 0 12px; letter-spacing: .05em; }
+  .scene p { font-size: 16.5px; line-height: 2; margin: 0; color: var(--dim); }
+
+  /* ---------- 精选字幕 ---------- */
+  .subs { border-left: 2px solid var(--gold); padding-left: 26px; }
+  .sub { margin: 0 0 22px; }
+  .sub:last-child { margin-bottom: 0; }
+  .sub .t { font-family: var(--serif); font-size: 18px; line-height: 1.9; margin: 0 0 6px; }
+  .sub .m { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .14em; }
+  .sub .m b { color: var(--gold); font-weight: 400; }
+
+  /* ---------- 时间线 ---------- */
+  .reel-month { display: flex; align-items: center; gap: 16px; margin: 28px 0 8px; }
+  .reel-month:first-of-type { margin-top: 0; }
+  .reel-month .label { font-family: var(--serif); font-size: 19px; letter-spacing: .18em; color: var(--gold); }
+  .reel-month .rule { flex: 1; height: 1px; background: var(--line); }
+  .reel-month .count { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .14em; }
+  .entry { display: flex; gap: 16px; padding: 10px 0; border-bottom: 1px solid rgba(44, 48, 54, .6); }
+  .entry:last-child { border-bottom: 0; }
+  .entry .date { width: 84px; flex: none; white-space: nowrap; font-family: var(--mono); font-size: 11px; color: var(--muted); padding-top: 4px; letter-spacing: .04em; }
+  .entry .kind { flex: none; width: 64px; font-family: var(--mono); font-size: 10px; color: var(--gold); padding-top: 5px; letter-spacing: .08em; }
+  .entry .kind.pinned::after { content: " ✦"; }
+  .entry .text { flex: 1; font-size: 16px; line-height: 1.85; color: var(--ink); }
+  .empty-note { font-family: var(--serif); font-size: 16px; color: var(--muted); padding: 14px 0; }
+  .truncation { margin-top: 16px; font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .06em; }
+
+  /* ---------- 剧照 ---------- */
+  .stills { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .still { background: var(--panel); border: 1px solid var(--line); padding: 7px; }
+  .still img { display: block; width: 100%; height: 172px; object-fit: cover; filter: saturate(.82) contrast(1.04); }
+  .still .cap { margin-top: 8px; font-family: var(--mono); font-size: 10px; color: var(--muted); line-height: 1.7; letter-spacing: .02em; }
+
+  /* ---------- 结尾 ---------- */
+  .fin { text-align: center; padding-top: 20px; }
+  .fin .word { font-family: var(--serif); font-size: 54px; letter-spacing: .5em; color: var(--gold); margin: 0 0 26px; padding-left: .5em; }
+  .fin .line { font-family: var(--serif); font-size: 22px; line-height: 1.95; margin: 0 auto; max-width: 660px; color: var(--ink); }
+  .fin .kinds { margin: 26px 0 0; font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .16em; }
+  .footer { display: flex; justify-content: space-between; margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .16em; }
+
+  @media (max-width: 840px) {
+    .report { width: 100%; padding: 0 22px 56px; }
+    .cover-year-ghost { font-size: 120px; margin-bottom: -46px; }
+    .cover-title { font-size: 40px; }
+    .strip { grid-template-columns: repeat(6, 1fr); }
+    .stills { grid-template-columns: 1fr 1fr; }
+  }
+  @media print {
+    .report { width: 100%; }
+  }
+</style>
+</head>
+<body>
+<main class="report">
+
+  <div class="perfs"></div>
+
+  <section class="report-block cover">
+    <div class="cover-bar">
+      <span>LIFESPAN PICTURES · YEARBOOK</span>
+      <span>{{ year }} · {{ character_name }}</span>
+    </div>
+    <div class="cover-year-ghost">{{ year }}</div>
+    <h1 class="cover-title">{{ title }}</h1>
+    <p class="cover-sub">{{ subtitle }}</p>
+    <div class="cover-meta">
+      <div class="cover-age">
+        <span class="n">{{ age }}</span>
+        <span class="u">YEARS OLD</span>
+      </div>
+      <div class="cover-facts">
+        <p class="bday">{{ birthday_line }}</p>
+        <p class="date">{{ today_text }} / {{ weekday_text }}</p>
+      </div>
+    </div>
+    {% if opening_quote %}<p class="cover-quote">“{{ opening_quote }}”</p>{% endif %}
+  </section>
+
+  <div class="perfs"></div>
+
+  {% if intro %}
+  <section class="report-block">
+    <div class="sect-label">OPENING</div>
+    <p class="lead">{{ intro }}</p>
+  </section>
+  {% endif %}
+
+  <section class="report-block stats">
+    <div class="stat"><b>{{ stats.total }}</b><span>RECORDS</span></div>
+    <div class="stat"><b>{{ stats.active_months }}</b><span>MONTHS</span></div>
+    <div class="stat"><b>{{ stats.pinned }}</b><span>PROMISES</span></div>
+    <div class="stat"><b>{{ stats.media }}</b><span>STILLS</span></div>
+  </section>
+
+  <section class="report-block">
+    <div class="sect-label">TIMELINE</div>
+    <div class="strip">
+      {% for month in months %}
+      <div class="frame-cell l{{ month.level }}" title="{{ month.label }}：{{ month.count }} 条">
+        <em>{{ month.count }}</em>
+        <i>{{ month.month }}</i>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  {% for section in sections %}
+  <section class="report-block scene">
+    <div class="scene-no">SCENE {{ '%02d'|format(loop.index) }}</div>
+    <div class="scene-main">
+      <h2>{{ section.heading }}</h2>
+      <p>{{ section.body }}</p>
+    </div>
+  </section>
+  {% endfor %}
+
+  {% if highlights %}
+  <section class="report-block">
+    <div class="sect-label">SUBTITLES</div>
+    <div class="subs">
+      {% for entry in highlights[:4] %}
+      <div class="sub">
+        <p class="t">{{ entry.text }}</p>
+        <p class="m"><b>{{ entry.date_text or '某一天' }}</b> · {{ entry.kind_label }}{% if entry.pinned %} · 约定{% endif %}</p>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="report-block">
+    <div class="sect-label">THE YEAR IN FOOTAGE</div>
+    {% if entries_by_month %}
+      {% for group in entries_by_month %}
+      <div class="reel-month">
+        <span class="label">{{ group.label }}</span>
+        <span class="rule"></span>
+        <span class="count">{{ group.count }} 条</span>
+      </div>
+      {% for entry in group.entries %}
+      <div class="entry">
+        <span class="date">{{ entry.date_text or '—' }}</span>
+        <span class="kind{% if entry.pinned %} pinned{% endif %}">{{ entry.kind_label }}</span>
+        <span class="text">{{ entry.text }}</span>
+      </div>
+      {% endfor %}
+      {% endfor %}
+      {% if truncation_note %}<p class="truncation">{{ truncation_note }}</p>{% endif %}
+    {% else %}
+      <p class="empty-note">{{ character_name }} 这一年没有留下镜头。黑场，也是电影的一部分。</p>
+    {% endif %}
+  </section>
+
+  {% if media %}
+  <section class="report-block">
+    <div class="sect-label">STILLS</div>
+    <div class="stills">
+      {% for item in media %}
+      <div class="still">
+        <img src="{{ item.src }}" alt="{{ item.caption }}">
+        <div class="cap">{{ item.caption }}{% if item.date_text %} · {{ item.date_text }}{% endif %}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="report-block fin">
+    <p class="word">FIN</p>
+    <p class="line">{{ closing }}</p>
+    {% if kinds %}
+    <p class="kinds">{% for kind in kinds %}{{ kind.label }} {{ kind.count }}{% if not loop.last %} / {% endif %}{% endfor %}</p>
+    {% endif %}
+  </section>
+
+  <section class="report-block footer">
+    <span>GENERATED {{ generated_at }}</span>
+    <span>{{ theme_title }} · {{ mode_label }}</span>
+  </section>
+
+  <div class="perfs"></div>
+
+</main>
+</body>
+</html>

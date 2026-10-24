@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>年报模板 · 寿命论</title>
+    <!-- 由 AstrBot 在服务端换成本页面的 asset_token 地址；显式引入保证 bridge 先于 app.js 就绪 -->
+    <script src="/api/plugin/page/bridge-sdk.js"></script>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="title-wrap">
+          <h1 id="page-title">年报模板</h1>
+          <p class="subtitle">
+            <span id="plugin-name">寿命论</span>
+            <span class="dot">·</span>
+            <span id="page-name">yearbook</span>
+          </p>
+        </div>
+        <div class="status-chips" id="status-chips"></div>
+        <div class="top-actions">
+          <button class="btn ghost" id="btn-refresh" title="重新读取模板列表">↻ 刷新</button>
+          <button class="btn ghost" id="btn-new" title="新建一个空白模板">＋ 新建</button>
+          <button class="btn ghost" id="btn-import" title="导入 .html / .zip 模板">⇪ 导入</button>
+          <input type="file" id="import-file" accept=".html,.htm,.zip" hidden />
+        </div>
+      </header>
+
+      <div id="bridge-warning" class="banner warn hidden">
+        没有检测到 AstrBot 页面 bridge：请从 AstrBot WebUI 的插件页进入本页面；
+        以文件方式直接打开时无法读写模板。
+      </div>
+      <div id="error" class="banner error hidden"></div>
+
+      <main class="layout">
+        <aside class="sidebar">
+          <div class="sidebar-head">
+            <h2>模板</h2>
+            <span class="muted" id="template-count">0 个</span>
+          </div>
+          <div id="template-list" class="template-list">
+            <div class="empty">加载中…</div>
+          </div>
+          <div class="sidebar-foot">
+            <h3>可用变量</h3>
+            <div class="var-chips" id="var-chips"></div>
+            <p class="hint">
+              模板用 Jinja2 语法：<code>{{ 变量 }}</code>、<code>{% for %}</code>。预览会用样例数据渲染；模板名支持中文/字母/数字/下划线/连字符（不需要 .html）。
+            </p>
+          </div>
+        </aside>
+
+        <section class="editor">
+          <div class="editor-head">
+            <label class="name-field">
+              <span>模板名</span>
+              <input
+                type="text"
+                id="template-name"
+                maxlength="64"
+                placeholder="例如 my-yearbook"
+                spellcheck="false"
+              />
+            </label>
+            <div class="editor-meta" id="editor-meta"></div>
+          </div>
+          <div class="editor-body">
+            <div class="line-gutter" id="line-gutter" aria-hidden="true">1</div>
+            <textarea
+              id="template-html"
+              spellcheck="false"
+              autocomplete="off"
+              autocapitalize="off"
+              placeholder="在这里编辑年报模板 HTML / Jinja2 代码…"
+            ></textarea>
+          </div>
+          <div class="editor-foot">
+            <div class="foot-left" id="dirty-flag"></div>
+            <div class="foot-actions">
+              <button class="btn ghost" id="btn-download" title="把当前编辑器内容下载到本地">下载</button>
+              <button class="btn danger" id="btn-delete" title="删除当前用户模板">删除</button>
+              <button class="btn ghost" id="btn-preview" title="用样例数据预览">预览</button>
+              <button class="btn primary" id="btn-save" title="保存（Ctrl+S）">保存</button>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <div id="toast" class="toast hidden"></div>
+
+      <!-- 预览：模板是用户内容，iframe 只给 allow-scripts，不给 allow-same-origin -->
+      <div id="preview-modal" class="modal hidden">
+        <div class="modal-card preview-card">
+          <div class="modal-head">
+            <h2 id="preview-title">模板预览</h2>
+            <div class="modal-actions">
+              <span class="muted" id="preview-size"></span>
+              <button class="btn ghost" id="btn-preview-refresh" title="重新渲染">↻ 重新渲染</button>
+              <button class="btn ghost" id="btn-preview-close" aria-label="关闭">✕</button>
+            </div>
+          </div>
+          <div id="preview-warnings" class="preview-warnings hidden"></div>
+          <div class="preview-frame-wrap">
+            <iframe
+              id="preview-frame"
+              title="模板预览"
+              sandbox="allow-scripts"
+              referrerpolicy="no-referrer"
+            ></iframe>
+          </div>
+        </div>
+      </div>
+
+      <!-- 通用确认框：sandbox 页面里原生 confirm 会被浏览器吞掉，必须自己画 -->
+      <div id="confirm-modal" class="modal hidden">
+        <div class="modal-card confirm-card">
+          <h2 id="confirm-title">确认</h2>
+          <p id="confirm-message"></p>
+          <div class="modal-actions end">
+            <button class="btn ghost" id="btn-confirm-cancel">取消</button>
+            <button class="btn danger" id="btn-confirm-ok">确定</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script src="./app.js"></script>
+  </body>
+</html>

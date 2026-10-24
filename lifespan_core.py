@@ -553,28 +553,72 @@ def parse_generation_reply(text: str) -> dict | None:
     return style
 
 
-def render_style_lines(style: dict | None, tier: dict) -> list[str]:
-    """优先用 LLM 生成内容；没有就用兜底档位文案。返回注入块里的风格行。"""
+def render_style_lines(
+    style: dict | None, tier: dict, options: dict | None = None
+) -> list[str]:
+    """优先用 LLM 生成内容；没有就用兜底档位文案。返回注入块里的风格行。
+
+    options 支持按项开关（tone/manner/avoid），用于「注入强度」配置：
+    {"tone": True, "manner": True, "avoid": True}；缺省全开。
+    """
     has_style = isinstance(style, dict) and bool(
         str(style.get("tone") or "").strip() or str(style.get("manner") or "").strip()
     )
     source = style if has_style else tier
+    opts = options or {}
+    show_tone = bool(opts.get("tone", True))
+    show_manner = bool(opts.get("manner", True))
+    show_avoid = bool(opts.get("avoid", True))
     lines: list[str] = []
     # _flatten_field：旧 state.json 可能存着列表形态的 avoid，不能把 Python 列表 repr 注入上下文
     tone = _flatten_field(source.get("tone")).strip()
     manner = _flatten_field(source.get("manner")).strip()
     avoid = _flatten_field(source.get("avoid")).strip()
-    if tone:
+    if tone and show_tone:
         lines.append(f"说话的口吻：{tone}")
-    if manner:
+    if manner and show_manner:
         lines.append(f"行为与情绪：{manner}")
-    if avoid:
+    if avoid and show_avoid:
         lines.append(f"这一档别写成：{avoid}")
-    if has_style:
+    if has_style and show_avoid:
         continuity = str(style.get("continuity") or "").strip()
         if continuity:
             lines.append(f"与上一档相比：{continuity}")
     return lines
+
+
+# 注入块长度裁剪：先丢「别写成 / 与上一档相比」，再按比例截断口吻与行为描述，
+# 年龄/日期/档位/生日/memory_note 这些状态行永远保留。
+_STYLE_PREFIXES = ("说话的口吻：", "行为与情绪：")
+_DROPPABLE_PREFIXES = ("这一档别写成：", "与上一档相比：")
+
+
+def trim_block_lines(lines: list[str], max_chars: int) -> list[str]:
+    if max_chars <= 0:
+        return lines
+    if len("\n".join(lines)) <= max_chars:
+        return lines
+    kept = [line for line in lines if not line.startswith(_DROPPABLE_PREFIXES)]
+    if len("\n".join(kept)) <= max_chars:
+        return kept
+    style_lines = [line for line in kept if line.startswith(_STYLE_PREFIXES)]
+    if not style_lines:
+        return kept
+    fixed_len = sum(len(line) + 1 for line in kept if not line.startswith(_STYLE_PREFIXES))
+    budget = max_chars - fixed_len - len(style_lines)
+    if budget < 40:
+        return [line for line in kept if not line.startswith(_STYLE_PREFIXES)]
+    each = max(24, budget // len(style_lines))
+    out: list[str] = []
+    for line in kept:
+        if line.startswith(_STYLE_PREFIXES) and len(line) > each:
+            out.append(line[:each].rstrip() + "…")
+        else:
+            out.append(line)
+    block = "\n".join(out)
+    if len(block) > max_chars:
+        block = block[:max_chars].rstrip() + "…"
+    return block.split("\n")
 
 
 # ==================================================================== 注入块
@@ -591,8 +635,14 @@ def build_block(
     memory_note: bool = True,
     manual: bool = False,
     pending: bool = False,
+    inject_options: dict | None = None,
+    extra_lines: list[str] | None = None,
 ) -> str:
-    """拼出要注入的那段文字。整段是给模型看的内部状态，不是要念出来的台词。"""
+    """拼出要注入的那段文字。整段是给模型看的内部状态，不是要念出来的台词。
+
+    inject_options: {"tone","manner","avoid","max_chars"}，v1.0.0 的注入强度配置；
+    extra_lines: 额外的短句（季节感/生日特典/里程碑），插在风格行之后、状态备注之前。
+    """
     lines = [
         f"{BLOCK_MARK}，不要复述这段，也不要念出里面的数字和日期】",
         f"角色：{character_name}",
@@ -609,7 +659,9 @@ def build_block(
             f"今天是她的生日，{age} 岁整整一年从今天开始；这件事她心里清楚，"
             "说话可以带一点藏不住的高兴，但别主动开庆生大会。"
         )
-    lines.extend(render_style_lines(style, tier))
+    lines.extend(render_style_lines(style, tier, inject_options))
+    if extra_lines:
+        lines.extend(str(line) for line in extra_lines if str(line).strip())
     if pending:
         lines.append("（注：这段风格文案是手写档位版，生成版还没就绪，先按这个演，不要提及这件事。）")
     if memory_note and age != base_age:
@@ -624,7 +676,11 @@ def build_block(
                 f"（原设定里的「{base_age} 岁」是后来的事，现在她实际 {age} 岁——年龄以本段为准，"
                 "人设其它部分照旧。）"
             )
-    return "\n".join(lines)
+    try:
+        max_chars = int((inject_options or {}).get("max_chars", 0) or 0)
+    except (TypeError, ValueError):
+        max_chars = 0
+    return "\n".join(trim_block_lines(lines, max_chars))
 
 
 # ==================================================================== 自检
@@ -710,6 +766,43 @@ def self_check() -> str:
         base_age=14,
     )
     assert "说话的口吻：" + tier["tone"] in fallback_block
+    # v1.0.0：注入强度 / 额外行 / 长度裁剪
+    only_manner = build_block(
+        character_name="测试角色",
+        birth=birth,
+        today=today,
+        age=14,
+        tier=tier,
+        style=style,
+        base_age=14,
+        inject_options={"tone": False, "manner": True, "avoid": False, "max_chars": 0},
+    )
+    assert "行为与情绪：" in only_manner and "说话的口吻：" not in only_manner
+    assert "这一档别写成：" not in only_manner
+    with_extra = build_block(
+        character_name="测试角色",
+        birth=birth,
+        today=today,
+        age=14,
+        tier=tier,
+        style=style,
+        base_age=14,
+        extra_lines=["（今年第 1 个夏天。）"],
+    )
+    assert "（今年第 1 个夏天。）" in with_extra
+    trimmed = build_block(
+        character_name="测试角色",
+        birth=birth,
+        today=today,
+        age=14,
+        tier=tier,
+        style={"tone": "啊" * 200, "manner": "吧" * 200, "avoid": "哦" * 200},
+        base_age=14,
+        inject_options={"max_chars": 400},
+    )
+    assert len(trimmed) <= 400 + 20, len(trimmed)
+    assert "年龄：14 岁" in trimmed and "年龄档：14-16" in trimmed
+
     # 人设年龄体检（v0.1.3）
     lint = lint_persona_style("你是14岁美少女，永远用稚嫩的语气撒娇，不许长大。")
     kinds = {f["kind"] for f in lint["findings"]}

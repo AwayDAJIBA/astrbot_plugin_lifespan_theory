@@ -1,0 +1,325 @@
+{# theme-title: 生日红金 #}
+{# theme-desc: 酒红封面、烫金标题与纸屑，把生日做成年报的封面印章。 #}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="report-entries" content="{{ entries | length }}">
+<meta name="report-version" content="1">
+<title>{{ title }} · 生日年报</title>
+<style>
+  :root {
+    --wine: #6c1f27;
+    --wine-deep: #55171e;
+    --cream: #fdf7ef;
+    --ink: #3e2120;
+    --muted: #9a7066;
+    --line: #e6cdc4;
+    --gold: #c99a45;
+    --gold-soft: #f0dcae;
+    --serif: "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", "SimSun", serif;
+    --sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    --mono: "SFMono-Regular", "Consolas", "Courier New", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { background: var(--cream); color: var(--ink); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  .report { width: 900px; margin: 0 auto; background: var(--cream); padding-bottom: 84px; }
+  .report-block { margin: 0 0 48px; }
+  .report-block:last-child { margin-bottom: 0; }
+  .inner { padding: 0 72px; }
+
+  /* ---------- 封面 ---------- */
+  .cover {
+    position: relative;
+    background:
+      radial-gradient(700px 420px at 18% 8%, rgba(255, 226, 180, .14), transparent 62%),
+      radial-gradient(600px 380px at 88% 92%, rgba(255, 226, 180, .1), transparent 60%),
+      linear-gradient(165deg, var(--wine) 0%, var(--wine-deep) 100%);
+    color: #f7e9d6;
+    padding: 58px 64px 52px;
+    overflow: hidden;
+  }
+  .confetti { position: absolute; inset: 0; pointer-events: none; opacity: .5; }
+  .confetti span {
+    position: absolute; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--gold-soft); opacity: .65;
+  }
+  .confetti span:nth-child(3n) { width: 5px; height: 11px; border-radius: 1px; background: #e8c98f; }
+  .confetti span:nth-child(4n) { background: #f3d9c0; opacity: .4; }
+  .cover-kicker { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10px; letter-spacing: .32em; color: rgba(247, 233, 214, .62); }
+  .cover-inner { position: relative; margin-top: 42px; }
+  .birthday-mark { font-family: var(--serif); font-size: 15px; letter-spacing: .5em; color: var(--gold-soft); margin: 0 0 18px; }
+  .cover-title { font-family: var(--serif); font-size: 60px; font-weight: 600; line-height: 1.24; margin: 0 0 14px; letter-spacing: .03em; }
+  .gold-text {
+    background: linear-gradient(102deg, #f7e3b0 0%, #d9a441 34%, #f9edc8 58%, #c08f36 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  @supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+    .gold-text { color: var(--gold-soft); }
+  }
+  .cover-sub { font-family: var(--serif); font-size: 19px; color: rgba(247, 233, 214, .82); margin: 0 0 34px; letter-spacing: .04em; }
+  .cover-rule { height: 1px; background: linear-gradient(90deg, rgba(240, 220, 174, 0), rgba(240, 220, 174, .75), rgba(240, 220, 174, 0)); margin: 0 0 30px; }
+  .cover-body { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
+  .cover-age { display: flex; align-items: baseline; gap: 12px; }
+  .cover-age .n { font-family: var(--serif); font-size: 116px; line-height: .86; letter-spacing: -.02em; }
+  .cover-age .u { font-family: var(--serif); font-size: 20px; color: rgba(247, 233, 214, .7); }
+  .cover-facts { text-align: right; }
+  .cover-facts .bday { font-family: var(--serif); font-size: 16px; margin: 0 0 10px; color: rgba(247, 233, 214, .92); }
+  .cover-facts .date { font-family: var(--mono); font-size: 10px; letter-spacing: .2em; color: rgba(247, 233, 214, .55); }
+  .cover-quote {
+    position: relative; margin: 36px 0 0; padding-top: 22px;
+    border-top: 1px solid rgba(240, 220, 174, .28);
+    font-family: var(--serif); font-size: 18px; font-style: italic; letter-spacing: .06em;
+    color: rgba(247, 233, 214, .8);
+  }
+
+  /* ---------- 开场 ---------- */
+  .intro { padding-top: 52px; }
+  .intro p { font-family: var(--serif); font-size: 21px; line-height: 2.05; margin: 0; }
+  .intro .orn { text-align: center; color: var(--gold); font-size: 16px; letter-spacing: .6em; margin-bottom: 22px; }
+
+  /* ---------- 数字 ---------- */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .stat {
+    border: 1px solid var(--line); background: #fffaf4; padding: 22px 8px 18px; text-align: center;
+    position: relative;
+  }
+  .stat::before { content: ""; position: absolute; inset: 5px; border: 1px solid rgba(201, 154, 69, .18); pointer-events: none; }
+  .stat b { display: block; font-family: var(--serif); font-size: 38px; font-weight: 600; color: var(--wine); line-height: 1.1; }
+  .stat span { display: block; margin-top: 6px; font-family: var(--serif); font-size: 13px; color: var(--muted); letter-spacing: .12em; }
+
+  /* ---------- 月份 ---------- */
+  .sect-head { display: flex; align-items: center; gap: 16px; margin: 0 0 18px; }
+  .sect-head .name { font-family: var(--serif); font-size: 22px; letter-spacing: .14em; color: var(--wine); white-space: nowrap; }
+  .sect-head .rule { flex: 1; height: 1px; background: linear-gradient(90deg, var(--line), transparent); }
+  .sect-head .note { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .18em; }
+  .month-strip { display: grid; grid-template-columns: repeat(12, 1fr); gap: 6px; }
+  .m-cell { text-align: center; padding: 10px 2px 7px; border: 1px solid var(--line); background: #fffaf4; }
+  .m-cell em { display: block; font-style: normal; font-family: var(--serif); font-size: 15px; color: var(--wine); }
+  .m-cell i { display: block; font-style: normal; font-family: var(--mono); font-size: 9px; color: var(--muted); margin-top: 5px; }
+  .m1 { background: #fdf0e2; }
+  .m2 { background: #f9e3cf; }
+  .m3 { background: #f2d2b6; }
+  .m4 { background: linear-gradient(180deg, #eec9a4, #e2b98e); border-color: var(--gold); }
+  .m3 em, .m4 em { color: #5a2c22; }
+
+  /* ---------- 正文段 ---------- */
+  .chapter { display: flex; gap: 26px; }
+  .chapter-no { flex: none; width: 50px; padding-top: 6px; }
+  .chapter-no span {
+    display: inline-block; font-family: var(--serif); font-size: 15px; color: var(--gold);
+    border: 1px solid var(--gold); border-radius: 50%; width: 34px; height: 34px;
+    line-height: 32px; text-align: center;
+  }
+  .chapter-main { flex: 1; }
+  .chapter h2 { font-family: var(--serif); font-size: 27px; font-weight: 600; margin: 0 0 12px; color: var(--wine); letter-spacing: .04em; }
+  .chapter p { font-size: 17px; line-height: 2; margin: 0; color: #4a2d28; }
+
+  /* ---------- 精选 ---------- */
+  .picks { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .pick { border: 1px solid var(--line); background: #fffaf4; padding: 24px 26px 20px; position: relative; }
+  .pick::before { content: "❝"; position: absolute; top: 14px; left: 20px; color: var(--gold); font-size: 22px; font-family: var(--serif); }
+  .pick p { font-family: var(--serif); font-size: 17px; line-height: 1.95; margin: 14px 0 12px; color: #4a2d28; }
+  .pick .from { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .1em; }
+
+  /* ---------- 时间线 ---------- */
+  .month-head { display: flex; align-items: center; gap: 14px; margin: 26px 0 6px; }
+  .month-head:first-of-type { margin-top: 0; }
+  .month-head .label { font-family: var(--serif); font-size: 19px; color: var(--wine); letter-spacing: .12em; }
+  .month-head .rule { flex: 1; height: 1px; background: var(--line); }
+  .month-head .count { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .14em; }
+  .entry { display: flex; gap: 16px; padding: 10px 0; border-bottom: 1px dashed var(--line); }
+  .entry:last-child { border-bottom: 0; }
+  .entry .date { width: 84px; flex: none; white-space: nowrap; font-family: var(--mono); font-size: 11px; color: var(--muted); padding-top: 4px; }
+  .entry .kind { flex: none; width: 64px; padding-top: 2px; }
+  .entry .kind span { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 20px; background: #f5e2d6; color: #8a4a3c; white-space: nowrap; }
+  .entry .kind span.pinned { background: var(--wine); color: #f7e9d6; }
+  .entry .text { flex: 1; font-size: 16px; line-height: 1.85; color: #4a2d28; }
+  .empty-note { font-family: var(--serif); font-size: 16px; color: var(--muted); padding: 14px 0; }
+  .truncation { margin-top: 16px; font-family: var(--mono); font-size: 10px; color: var(--muted); }
+
+  /* ---------- 照片 ---------- */
+  .gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .photo { background: #fffaf4; border: 1px solid var(--line); padding: 7px; }
+  .photo img { display: block; width: 100%; height: 172px; object-fit: cover; }
+  .photo .cap { margin-top: 8px; font-family: var(--serif); font-size: 12px; color: var(--muted); line-height: 1.6; }
+
+  /* ---------- 结尾 ---------- */
+  .finale { position: relative; background: linear-gradient(168deg, var(--wine) 0%, var(--wine-deep) 100%); color: #f7e9d6; padding: 56px 72px 50px; text-align: center; overflow: hidden; }
+  .finale .hb { font-family: var(--serif); font-size: 46px; letter-spacing: .24em; margin: 0 0 26px; padding-left: .24em; }
+  .finale .line { font-family: var(--serif); font-size: 21px; line-height: 2; margin: 0 auto; max-width: 640px; color: rgba(247, 233, 214, .94); }
+  .finale .kinds { margin: 26px 0 0; font-family: var(--mono); font-size: 10px; letter-spacing: .18em; color: rgba(247, 233, 214, .55); }
+  .finale .sig { margin-top: 26px; font-family: var(--mono); font-size: 10px; letter-spacing: .2em; color: rgba(247, 233, 214, .45); }
+  .footer { display: flex; justify-content: space-between; padding: 0 72px; margin-top: 34px; font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .1em; }
+
+  @media (max-width: 840px) {
+    .report { width: 100%; }
+    .inner { padding: 0 22px; }
+    .cover { padding: 40px 24px 36px; }
+    .cover-title { font-size: 40px; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .month-strip { grid-template-columns: repeat(6, 1fr); }
+    .picks, .gallery { grid-template-columns: 1fr 1fr; }
+  }
+  @media print { .report { width: 100%; } }
+</style>
+</head>
+<body>
+<main class="report">
+
+  <section class="report-block cover">
+    <div class="confetti">
+      <span style="left:8%;top:12%"></span><span style="left:16%;top:64%"></span><span style="left:23%;top:28%"></span>
+      <span style="left:31%;top:82%"></span><span style="left:39%;top:18%"></span><span style="left:47%;top:70%"></span>
+      <span style="left:56%;top:34%"></span><span style="left:64%;top:88%"></span><span style="left:71%;top:14%"></span>
+      <span style="left:79%;top:56%"></span><span style="left:86%;top:26%"></span><span style="left:92%;top:74%"></span>
+    </div>
+    <div class="cover-kicker">
+      <span>HAPPY BIRTHDAY · YEARBOOK</span>
+      <span>{{ year }}</span>
+    </div>
+    <div class="cover-inner">
+      <p class="birthday-mark">生 日 快 乐</p>
+      <h1 class="cover-title"><span class="gold-text">{{ title }}</span></h1>
+      <p class="cover-sub">{{ subtitle }}</p>
+      <div class="cover-rule"></div>
+      <div class="cover-body">
+        <div class="cover-age">
+          <span class="n gold-text">{{ age }}</span>
+          <span class="u">岁</span>
+        </div>
+        <div class="cover-facts">
+          <p class="bday">{{ birthday_line }}</p>
+          <p class="date">{{ today_text }} · {{ weekday_text }}</p>
+        </div>
+      </div>
+      {% if opening_quote %}<p class="cover-quote">“{{ opening_quote }}”</p>{% endif %}
+    </div>
+  </section>
+
+  {% if intro %}
+  <section class="report-block intro inner">
+    <div class="orn">✦ ✦ ✦</div>
+    <p>{{ intro }}</p>
+  </section>
+  {% endif %}
+
+  <section class="report-block inner">
+    <div class="stats">
+      <div class="stat"><b>{{ stats.total }}</b><span>条记录</span></div>
+      <div class="stat"><b>{{ stats.active_months }}</b><span>个活跃月份</span></div>
+      <div class="stat"><b>{{ stats.pinned }}</b><span>条约定</span></div>
+      <div class="stat"><b>{{ stats.media }}</b><span>个媒体</span></div>
+    </div>
+  </section>
+
+  <section class="report-block inner">
+    <div class="sect-head">
+      <span class="name">十二个月</span>
+      <span class="rule"></span>
+      <span class="note">TWELVE MONTHS</span>
+    </div>
+    <div class="month-strip">
+      {% for month in months %}
+      <div class="m-cell m{{ month.level }}" title="{{ month.label }}：{{ month.count }} 条">
+        <em>{{ month.count }}</em>
+        <i>{{ month.month }}月</i>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  {% for section in sections %}
+  <section class="report-block inner chapter">
+    <div class="chapter-no"><span>{{ loop.index }}</span></div>
+    <div class="chapter-main">
+      <h2>{{ section.heading }}</h2>
+      <p>{{ section.body }}</p>
+    </div>
+  </section>
+  {% endfor %}
+
+  {% if highlights %}
+  <section class="report-block inner">
+    <div class="sect-head">
+      <span class="name">这一幕</span>
+      <span class="rule"></span>
+      <span class="note">HIGHLIGHTS</span>
+    </div>
+    <div class="picks">
+      {% for entry in highlights[:4] %}
+      <div class="pick">
+        <p>{{ entry.text }}</p>
+        <div class="from">{{ entry.date_text or '某一天' }} · {{ entry.kind_label }}{% if entry.pinned %} · 约定{% endif %}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="report-block inner">
+    <div class="sect-head">
+      <span class="name">这一年</span>
+      <span class="rule"></span>
+      <span class="note">THE YEAR</span>
+    </div>
+    {% if entries_by_month %}
+      {% for group in entries_by_month %}
+      <div class="month-head">
+        <span class="label">{{ group.label }}</span>
+        <span class="rule"></span>
+        <span class="count">{{ group.count }} 条</span>
+      </div>
+      {% for entry in group.entries %}
+      <div class="entry">
+        <span class="date">{{ entry.date_text or '—' }}</span>
+        <span class="kind"><span class="{% if entry.pinned %}pinned{% endif %}">{{ entry.kind_label }}</span></span>
+        <span class="text">{{ entry.text }}</span>
+      </div>
+      {% endfor %}
+      {% endfor %}
+      {% if truncation_note %}<p class="truncation">{{ truncation_note }}</p>{% endif %}
+    {% else %}
+      <p class="empty-note">{{ character_name }} 这一年还没有写下什么。空白的一页，也盖上了 {{ age }} 岁的印章。</p>
+    {% endif %}
+  </section>
+
+  {% if media %}
+  <section class="report-block inner">
+    <div class="sect-head">
+      <span class="name">照片</span>
+      <span class="rule"></span>
+      <span class="note">PHOTOS</span>
+    </div>
+    <div class="gallery">
+      {% for item in media %}
+      <div class="photo">
+        <img src="{{ item.src }}" alt="{{ item.caption }}">
+        <div class="cap">{{ item.caption }}{% if item.date_text %} · {{ item.date_text }}{% endif %}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="report-block finale">
+    <p class="hb">生日快乐</p>
+    <p class="line">{{ closing }}</p>
+    {% if kinds %}
+    <p class="kinds">{% for kind in kinds %}{{ kind.label }} {{ kind.count }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+    {% endif %}
+    <p class="sig">{{ character_name }} · {{ year }} · {{ age }} 岁</p>
+  </section>
+
+  <section class="report-block footer">
+    <span>GENERATED {{ generated_at }}</span>
+    <span>{{ theme_title }} · {{ mode_label }}</span>
+  </section>
+
+</main>
+</body>
+</html>

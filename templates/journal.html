@@ -1,0 +1,342 @@
+{# theme-title: 手账格纸 #}
+{# theme-desc: 横线纸、和纸胶带、便签与拍立得，把一年写成一页手账。 #}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="report-entries" content="{{ entries | length }}">
+<meta name="report-version" content="1">
+<title>{{ title }} · 手账年报</title>
+<style>
+  :root {
+    --paper: #fdf9ef;
+    --paper-2: #fbf3e0;
+    --ink: #4a4033;
+    --muted: #96866c;
+    --line: #e6dbc4;
+    --rule: rgba(150, 132, 100, .16);
+    --margin-red: rgba(196, 92, 82, .35);
+    --accent: #b2773c;
+    --tape: rgba(226, 200, 148, .55);
+    --highlight: #f6e3a8;
+    --kai: "Kaiti SC", "KaiTi", "STKaiti", "Noto Serif CJK SC", "Songti SC", serif;
+    --sans: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    --mono: "SFMono-Regular", "Consolas", "Courier New", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--paper-2);
+    color: var(--ink);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  .report {
+    width: 900px;
+    margin: 0 auto;
+    padding: 66px 64px 84px;
+    background-color: var(--paper);
+    background-image:
+      linear-gradient(90deg, transparent 0 63px, var(--margin-red) 63px 64px, transparent 64px),
+      repeating-linear-gradient(180deg, transparent 0 31px, var(--rule) 31px 32px);
+    background-size: 100% 100%, 100% 32px;
+  }
+  .report-block { margin: 0 0 46px; }
+  .report-block:last-child { margin-bottom: 0; }
+  .paper-card { background: var(--paper); border: 1px solid var(--line); box-shadow: 3px 4px 0 rgba(120, 100, 70, .07); }
+
+  /* ---------- 封面 ---------- */
+  .cover { position: relative; padding: 40px 44px 34px; margin-top: 12px; }
+  .cover::before {
+    content: "";
+    position: absolute;
+    top: -14px; left: 46px;
+    width: 132px; height: 28px;
+    background: var(--tape);
+    transform: rotate(-2.4deg);
+    box-shadow: 0 1px 2px rgba(120, 100, 70, .12);
+  }
+  .cover::after {
+    content: "";
+    position: absolute;
+    top: -10px; right: 60px;
+    width: 96px; height: 24px;
+    background: rgba(214, 176, 168, .42);
+    transform: rotate(3.1deg);
+  }
+  .cover-kicker { font-family: var(--mono); font-size: 11px; letter-spacing: .3em; color: var(--muted); }
+  .cover-title { font-family: var(--kai); font-size: 54px; font-weight: 700; line-height: 1.3; margin: 22px 0 10px; color: #3d3327; }
+  .cover-sub { font-family: var(--kai); font-size: 19px; color: var(--muted); margin: 0 0 26px; }
+  .cover-row { display: flex; align-items: center; gap: 26px; }
+  .date-stamp {
+    flex: none;
+    width: 118px; height: 118px;
+    border: 2px dashed var(--accent);
+    border-radius: 50%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    transform: rotate(-6deg);
+    color: var(--accent);
+    font-family: var(--mono);
+    line-height: 1.35;
+  }
+  .date-stamp b { font-size: 25px; letter-spacing: .02em; }
+  .date-stamp span { font-size: 10px; letter-spacing: .18em; }
+  .cover-age { font-family: var(--kai); font-size: 74px; font-weight: 700; line-height: 1; color: var(--ink); }
+  .cover-age small { font-size: 22px; font-weight: 400; color: var(--muted); margin-left: 8px; }
+  .cover-note { flex: 1; }
+  .cover-note p { margin: 0 0 8px; font-family: var(--kai); font-size: 16px; line-height: 1.8; }
+  .cover-note .stamp-line { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: .08em; }
+  .cover-quote { margin: 26px 0 0; text-align: right; font-family: var(--kai); font-size: 17px; color: var(--muted); }
+
+  /* ---------- 开场 ---------- */
+  .intro-card { padding: 30px 34px; position: relative; }
+  .intro-label { font-family: var(--mono); font-size: 10px; letter-spacing: .26em; color: var(--accent); margin-bottom: 14px; }
+  .intro-card p { font-family: var(--kai); font-size: 20px; line-height: 2.05; margin: 0; }
+  .pin {
+    position: absolute; top: -9px; left: 50%;
+    width: 18px; height: 18px; margin-left: -9px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 32%, #e2766b, #a8423a 68%);
+    box-shadow: 1px 2px 3px rgba(80, 40, 30, .35);
+  }
+
+  /* ---------- 数字便签 ---------- */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .sticky {
+    padding: 20px 12px 18px;
+    text-align: center;
+    background: var(--highlight);
+    box-shadow: 2px 3px 0 rgba(120, 100, 70, .1);
+    transform: rotate(-.5deg);
+  }
+  .stats .sticky:nth-child(2) { background: #f3ddc9; transform: rotate(.6deg); }
+  .stats .sticky:nth-child(3) { background: #e7e7cd; transform: rotate(-.4deg); }
+  .stats .sticky:nth-child(4) { background: #e3dfe9; transform: rotate(.5deg); }
+  .sticky b { display: block; font-family: var(--kai); font-size: 38px; line-height: 1.1; }
+  .sticky span { display: block; margin-top: 5px; font-family: var(--kai); font-size: 13px; color: #6d5f4b; letter-spacing: .06em; }
+
+  /* ---------- 月份贴纸 ---------- */
+  .month-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+  .month-chip { border: 1px solid var(--line); background: #fffdf7; padding: 12px 8px; text-align: center; border-radius: 2px; }
+  .month-chip .name { font-family: var(--kai); font-size: 15px; color: #6d5f4b; }
+  .month-chip .dots { margin-top: 7px; display: flex; justify-content: center; gap: 3px; min-height: 8px; }
+  .month-chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); opacity: .28; }
+  .month-chip .dot.on { opacity: 1; }
+  .month-chip .num { margin-top: 6px; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+  /* ---------- 正文段 ---------- */
+  .note-section { padding: 28px 34px 24px; position: relative; }
+  .note-section .tape {
+    position: absolute; top: -11px; left: 30px;
+    width: 88px; height: 22px; background: var(--tape);
+    transform: rotate(-1.8deg);
+  }
+  .note-section h2 {
+    font-family: var(--kai); font-size: 26px; font-weight: 700; margin: 0 0 14px;
+    display: inline;
+    background: linear-gradient(transparent 62%, var(--highlight) 62%);
+    padding: 0 4px 2px;
+  }
+  .note-section p { font-family: var(--kai); font-size: 18px; line-height: 2; margin: 14px 0 0; }
+
+  /* ---------- 精选便签 ---------- */
+  .picks { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .pick {
+    padding: 22px 20px 16px;
+    position: relative;
+    box-shadow: 2px 3px 0 rgba(120, 100, 70, .09);
+  }
+  .pick:nth-child(3n + 1) { background: #fdf2cd; transform: rotate(-.9deg); }
+  .pick:nth-child(3n + 2) { background: #f7e4d4; transform: rotate(.7deg); }
+  .pick:nth-child(3n) { background: #e9edd6; transform: rotate(-.4deg); }
+  .pick p { font-family: var(--kai); font-size: 16px; line-height: 1.9; margin: 0 0 12px; }
+  .pick .from { font-family: var(--mono); font-size: 10px; color: #7a6a52; letter-spacing: .04em; }
+  .pick .from::before { content: "· "; }
+
+  /* ---------- 时间线 ---------- */
+  .timeline-head { display: flex; align-items: center; gap: 12px; margin: 26px 0 6px; }
+  .timeline-head:first-of-type { margin-top: 0; }
+  .timeline-head .label {
+    font-family: var(--kai); font-size: 20px; font-weight: 700; color: #5b4c39;
+    background: #f0e2c4; padding: 2px 12px; border-radius: 2px; transform: rotate(-.6deg);
+  }
+  .timeline-head .count { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .entry { display: flex; gap: 14px; padding: 9px 0 9px 4px; border-bottom: 1px dashed var(--line); }
+  .entry:last-child { border-bottom: 0; }
+  .entry .date { width: 84px; flex: none; white-space: nowrap; font-family: var(--mono); font-size: 11px; color: var(--muted); padding-top: 5px; }
+  .entry .kind {
+    flex: none; width: 58px; align-self: flex-start;
+    font-family: var(--kai); font-size: 11px; color: #7a6a52;
+    border: 1px solid var(--line); background: #fffdf7; text-align: center;
+    padding: 2px 0; border-radius: 2px;
+  }
+  .entry .kind.pinned { border-color: var(--accent); color: var(--accent); }
+  .entry .text { flex: 1; font-family: var(--kai); font-size: 16px; line-height: 1.85; }
+  .empty-note { font-family: var(--kai); font-size: 16px; color: var(--muted); padding: 16px 0; }
+  .truncation { margin-top: 16px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+  /* ---------- 拍立得 ---------- */
+  .polaroids { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; padding-top: 6px; }
+  .polaroid {
+    background: #fffdf8;
+    border: 1px solid var(--line);
+    padding: 9px 9px 12px;
+    box-shadow: 2px 3px 0 rgba(120, 100, 70, .1);
+  }
+  .polaroid:nth-child(3n + 1) { transform: rotate(-1.2deg); }
+  .polaroid:nth-child(3n + 2) { transform: rotate(1deg); }
+  .polaroid:nth-child(3n) { transform: rotate(-.5deg); }
+  .polaroid img { display: block; width: 100%; height: 170px; object-fit: cover; }
+  .polaroid .cap { margin-top: 9px; font-family: var(--kai); font-size: 12px; color: #7a6a52; line-height: 1.6; }
+
+  /* ---------- 结尾 ---------- */
+  .closing-card { padding: 32px 36px 28px; position: relative; }
+  .closing-card::before {
+    content: ""; position: absolute; top: -12px; right: 70px;
+    width: 112px; height: 24px; background: rgba(214, 176, 168, .45); transform: rotate(2.6deg);
+  }
+  .closing-card .big { font-family: var(--kai); font-size: 25px; line-height: 1.95; margin: 0; }
+  .closing-card .sign { margin-top: 20px; text-align: right; font-family: var(--kai); font-size: 15px; color: var(--muted); }
+  .kinds-line { margin-top: 16px; font-family: var(--kai); font-size: 13px; color: var(--muted); }
+  .footer { display: flex; justify-content: space-between; margin-top: 40px; font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: .06em; }
+
+  @media (max-width: 840px) {
+    .report { width: 100%; padding: 36px 22px 56px; background-image: none; }
+    .cover-title { font-size: 38px; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .month-grid { grid-template-columns: repeat(4, 1fr); }
+    .picks, .polaroids { grid-template-columns: 1fr 1fr; }
+  }
+  @media print {
+    .report { width: 100%; }
+  }
+</style>
+</head>
+<body>
+<main class="report">
+
+  <section class="report-block cover paper-card">
+    <div class="cover-kicker">YEARBOOK · {{ year }} · {{ character_name }}</div>
+    <h1 class="cover-title">{{ title }}</h1>
+    <p class="cover-sub">{{ subtitle }}</p>
+    <div class="cover-row">
+      <div class="date-stamp">
+        <b>{{ year }}</b>
+        <span>{{ today[5:] | replace('-', '.') }}</span>
+        <span>{{ weekday_text }}</span>
+      </div>
+      <div class="cover-age">{{ age }}<small>岁</small></div>
+      <div class="cover-note">
+        <p>{{ birthday_line }}</p>
+        <p class="stamp-line">{{ weekday_text }} · 手账里记着 {{ stats.total }} 条</p>
+      </div>
+    </div>
+    {% if opening_quote %}<p class="cover-quote">“{{ opening_quote }}”</p>{% endif %}
+  </section>
+
+  {% if intro %}
+  <section class="report-block intro-card paper-card">
+    <div class="pin"></div>
+    <div class="intro-label">OPENING</div>
+    <p>{{ intro }}</p>
+  </section>
+  {% endif %}
+
+  <section class="report-block stats">
+    <div class="sticky"><b>{{ stats.total }}</b><span>条记录</span></div>
+    <div class="sticky"><b>{{ stats.active_months }}</b><span>个活跃月份</span></div>
+    <div class="sticky"><b>{{ stats.pinned }}</b><span>条约定</span></div>
+    <div class="sticky"><b>{{ stats.media }}</b><span>个媒体</span></div>
+  </section>
+
+  <section class="report-block">
+    <div class="month-grid">
+      {% for month in months %}
+      <div class="month-chip">
+        <div class="name">{{ month.label }}</div>
+        <div class="dots">
+          {% for i in range(month.count if month.count < 6 else 6) %}<span class="dot on"></span>{% endfor %}
+          {% for i in range((6 - month.count) if month.count < 6 else 0) %}<span class="dot"></span>{% endfor %}
+        </div>
+        <div class="num">{{ month.count }} 条</div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  {% for section in sections %}
+  <section class="report-block note-section paper-card">
+    {% if loop.first %}<div class="tape"></div>{% endif %}
+    <h2>{{ section.heading }}</h2>
+    <p>{{ section.body }}</p>
+  </section>
+  {% endfor %}
+
+  {% if highlights %}
+  <section class="report-block">
+    <div class="picks">
+      {% for entry in highlights[:6] %}
+      <div class="pick">
+        <p>{{ entry.text }}</p>
+        <div class="from">{{ entry.date_text or '某一天' }} · {{ entry.kind_label }}{% if entry.pinned %} · 约定{% endif %}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="report-block paper-card note-section">
+    <div class="tape"></div>
+    <h2>这一年的日子</h2>
+    {% if entries_by_month %}
+      {% for group in entries_by_month %}
+      <div class="timeline-head">
+        <span class="label">{{ group.label }}</span>
+        <span class="count">{{ group.count }} 条</span>
+      </div>
+      {% for entry in group.entries %}
+      <div class="entry">
+        <span class="date">{{ entry.date_text or '—' }}</span>
+        <span class="kind{% if entry.pinned %} pinned{% endif %}">{{ entry.kind_label }}</span>
+        <span class="text">{{ entry.text }}</span>
+      </div>
+      {% endfor %}
+      {% endfor %}
+      {% if truncation_note %}<p class="truncation">{{ truncation_note }}</p>{% endif %}
+    {% else %}
+      <p class="empty-note">{{ character_name }} 这一年还没有写下什么。空白的横线，也留着下一年。</p>
+    {% endif %}
+  </section>
+
+  {% if media %}
+  <section class="report-block">
+    <div class="polaroids">
+      {% for item in media %}
+      <div class="polaroid">
+        <img src="{{ item.src }}" alt="{{ item.caption }}">
+        <div class="cap">{{ item.caption }}{% if item.date_text %} · {{ item.date_text }}{% endif %}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="report-block closing-card paper-card">
+    <p class="big">{{ closing }}</p>
+    {% if kinds %}
+    <p class="kinds-line">
+      这一年的关键词：{% for kind in kinds %}{{ kind.label }}（{{ kind.count }}）{% if not loop.last %}、{% endif %}{% endfor %}
+    </p>
+    {% endif %}
+    <p class="sign">—— 记于 {{ today_text }}</p>
+  </section>
+
+  <section class="report-block footer">
+    <span>GENERATED {{ generated_at }}</span>
+    <span>{{ theme_title }} · {{ mode_label }}</span>
+  </section>
+
+</main>
+</body>
+</html>

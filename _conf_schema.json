@@ -125,5 +125,214 @@
     "description": "调试：把每轮真正注入的原文打到日志里",
     "type": "bool",
     "default": false
+  },
+  "persona_birthdays": {
+    "description": "多角色独立生日：人格 id -> 生日（YYYY-MM-DD）。为空则所有角色用上面的 birthday",
+    "type": "object",
+    "default": {},
+    "items": {},
+    "hint": "例如 {\"人格A\": \"2012-02-08\", \"人格B\": \"2015-06-01\"}；未列出的角色回落到 birthday。键是 AstrBot 人格库里的 persona_id。"
+  },
+  "inject_tone": {
+    "description": "注入时是否包含「说话的口吻」",
+    "type": "bool",
+    "default": true
+  },
+  "inject_manner": {
+    "description": "注入时是否包含「行为与情绪」",
+    "type": "bool",
+    "default": true
+  },
+  "inject_avoid": {
+    "description": "注入时是否包含「这一档别写成」",
+    "type": "bool",
+    "default": true
+  },
+  "max_inject_chars": {
+    "description": "注入块总长度上限（字符），0 = 不限制",
+    "type": "int",
+    "default": 1200,
+    "hint": "超长会先丢 avoid、再截断口吻/行为描述；年龄/档位/生日等状态行不会被截掉。"
+  },
+  "season_line": {
+    "description": "注入里是否带一句季节/时间感（「入冬了」「第 N 个夏天」）",
+    "type": "bool",
+    "default": false
+  },
+  "milestone_line": {
+    "description": "是否在 18/20/整十岁等里程碑年龄注入特殊提示",
+    "type": "bool",
+    "default": true
+  },
+  "lock_overrides_cache": {
+    "description": "锁定（/age lock）的档位文案是否优先于缓存/重新生成",
+    "type": "bool",
+    "default": true
+  },
+  "notebook_enable": {
+    "description": "启用「只写小本本」：agent 可以通过工具把和你自己有关的事记下来（平时读不回来，生日年报时使用）",
+    "type": "bool",
+    "default": false,
+    "hint": "只写不读；和长期记忆插件（iris_memory 等）功能不重叠。启用后 LLM 工具列表会多一个 notebook_write。"
+  },
+  "notebook_dup_threshold": {
+    "description": "小本本写入去重阈值（语义相似度），0~1，越高越不容易合并",
+    "type": "float",
+    "default": 0.92
+  },
+  "notebook_cleanup_enable": {
+    "description": "启用小本本清理（默认关闭）",
+    "type": "bool",
+    "default": false,
+    "hint": "只清理长期没被读/改、又不是约定、也没被年报用过的条目；默认只归档不硬删。"
+  },
+  "notebook_cleanup_idle_days": {
+    "description": "小本本条目空闲多少天后可被清理",
+    "type": "int",
+    "default": 180
+  },
+  "notebook_cleanup_mode": {
+    "description": "清理方式：archive=移到归档目录（可恢复），delete=真删",
+    "type": "string",
+    "default": "archive",
+    "options": [
+      "archive",
+      "delete"
+    ]
+  },
+  "notebook_daily_summary_enable": {
+    "description": "每天定时兜底总结（分段多层压缩）写进小本本",
+    "type": "bool",
+    "default": true,
+    "hint": "只读白名单会话；没有对话的日子跳过。"
+  },
+  "notebook_daily_summary_cron": {
+    "description": "每日兜底总结的 cron 表达式",
+    "type": "string",
+    "default": "0 4 * * *"
+  },
+  "notebook_summary_provider_id": {
+    "description": "总结用的模型 Provider（留空 = 用当前会话/默认模型）",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "notebook_summary_max_input_chars": {
+    "description": "每日总结单次喂给模型的字符上限",
+    "type": "int",
+    "default": 12000
+  },
+  "notebook_summary_max_chars_per_note": {
+    "description": "每日总结写入的单条笔记最大字符数",
+    "type": "int",
+    "default": 600
+  },
+  "notebook_media_thumb_size": {
+    "description": "小本本媒体缩略图长边像素",
+    "type": "int",
+    "default": 720
+  },
+  "notebook_media_keep_original": {
+    "description": "除缩略图外是否保留原始图片/视频",
+    "type": "bool",
+    "default": false,
+    "hint": "默认只存缩略图，省空间也更隐私；被 agent 选择附加的媒体不会被清理。"
+  },
+  "report_enable": {
+    "description": "启用生日年报",
+    "type": "bool",
+    "default": true
+  },
+  "report_whitelist": {
+    "description": "年报白名单：QQ 号或群号（仅 OneBot/aiocqhttp；既是发送目标，也是每日总结的会话范围）",
+    "type": "list",
+    "default": [],
+    "hint": "例如 [\"123456789\", \"987654321\"]；`report_target_mode=current` 时只在当前会话满足白名单才发。"
+  },
+  "report_blacklist": {
+    "description": "年报黑名单：QQ 号或群号（优先于白名单）",
+    "type": "list",
+    "default": []
+  },
+  "report_target_mode": {
+    "description": "年报发送范围：current=当前会话（需不在黑名单且满足白名单规则）；whitelist=按白名单逐个发",
+    "type": "string",
+    "default": "current",
+    "options": [
+      "current",
+      "whitelist"
+    ]
+  },
+  "report_trigger": {
+    "description": "年报触发时机：first_message=生日当天首条消息；cron=定时；both=两者都（幂等）",
+    "type": "string",
+    "default": "both",
+    "options": [
+      "first_message",
+      "cron",
+      "both"
+    ]
+  },
+  "report_cron": {
+    "description": "年报定时检查的 cron 表达式",
+    "type": "string",
+    "default": "0 4 * * *"
+  },
+  "report_content_mode": {
+    "description": "年报文案模式：template=纯模板；llm=模型自由生成；llm_guided=模板给骨架、模型润色",
+    "type": "string",
+    "default": "llm_guided",
+    "options": [
+      "template",
+      "llm",
+      "llm_guided"
+    ]
+  },
+  "report_theme": {
+    "description": "年报模板：random=随机；或填模板名",
+    "type": "string",
+    "default": "random"
+  },
+  "report_include_media": {
+    "description": "年报是否插入一年内（被 agent 选择过的）图片/视频缩略图",
+    "type": "bool",
+    "default": true
+  },
+  "report_max_media": {
+    "description": "年报最多插入多少个媒体",
+    "type": "int",
+    "default": 12
+  },
+  "report_llm_provider_id": {
+    "description": "年报文案用的模型 Provider（留空 = 用当前会话/默认模型）",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider"
+  },
+  "report_timeout": {
+    "description": "年报生成/渲染超时秒数",
+    "type": "int",
+    "default": 300
+  },
+  "report_render_engine": {
+    "description": "年报渲染引擎：auto=有 Playwright 就截图否则 Pillow；也可强制 playwright/pillow/html",
+    "type": "string",
+    "default": "auto",
+    "options": [
+      "auto",
+      "playwright",
+      "pillow",
+      "html"
+    ]
+  },
+  "report_max_pages": {
+    "description": "年报分页图最大页数",
+    "type": "int",
+    "default": 12
+  },
+  "report_keep_years": {
+    "description": "年报归档保留年数（0=不自动清理）",
+    "type": "int",
+    "default": 5
   }
 }

@@ -26,7 +26,7 @@ import asyncio
 import json
 import re
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -56,6 +56,26 @@ from .lifespan_core import (
     tier_key,
     tier_span_text,
 )
+
+# ---- v1.0.0 可选模块：缺任一模块时插件仍能加载（便于分阶段开发/裁剪发布）----
+try:
+    from . import extras as extras_mod
+except Exception:  # noqa: BLE001
+    extras_mod = None
+try:
+    from .notebook import Notebook as _Notebook
+except Exception:  # noqa: BLE001
+    _Notebook = None
+try:
+    from .yearbook import TemplateStore as _TemplateStore
+    from .yearbook import YearbookBuilder as _YearbookBuilder
+except Exception:  # noqa: BLE001
+    _TemplateStore = None
+    _YearbookBuilder = None
+try:
+    from . import webui as webui_mod
+except Exception:  # noqa: BLE001
+    webui_mod = None
 
 PLUGIN_NAME = "astrbot_plugin_lifespan_theory"
 STATE_FILE = "state.json"
@@ -92,7 +112,7 @@ provider 的报错正文可能回显请求片段，而请求里含人格提示�
     PLUGIN_NAME,
     "Dejiko",
     "按生日现算角色年龄；年龄进入新档时用 LLM 把人格提示词与年龄综合成说话方式注入上下文，让人设随年龄自然生长。",
-    "0.1.3",
+    "1.0.0",
 )
 class LifespanTheoryPlugin(Star):
     def __init__(self, context: Context, config: dict | None = None):
@@ -109,9 +129,18 @@ class LifespanTheoryPlugin(Star):
         self._data_dir_override: str | Path | None = None
         self._loaded_at: float = time.time()
         self._warned_bad_timezone: bool = False
+        # ---- v1.0.0 新增状态 ----
+        self._lock_store = None
+        self._notebook = None
+        self._templates = None
+        self._yearbook = None
+        self._cron_job_ids: dict[str, str] = {}
+        self._report_tasks: set[asyncio.Task] = set()
+        self._embed_provider = None
 
     # ------------------------------------------------------------------ 生命周期
     async def initialize(self) -> None:
+        await self._init_modules()
         try:
             info = self._resolve_info()
         except Exception as exc:  # noqa: BLE001
@@ -122,12 +151,22 @@ class LifespanTheoryPlugin(Star):
                 f"[{PLUGIN_NAME}] 已加载：{info['today'].isoformat()} / {info['age']} 岁 / "
                 f"档位 {tier_key(info['tier'])} / 生成模式 {self._cfg('generation_mode', 'background')}"
             )
+        logger.info(
+            f"[{PLUGIN_NAME}] v1.0.0 模块：notebook={'有' if self._notebook else '关/缺'} / "
+            f"yearbook={'有' if self._yearbook else '缺'} / webui={'有' if webui_mod else '缺'} / "
+            f"extras={'有' if extras_mod else '缺'}"
+        )
+        await self._init_tools()
+        await self._init_cron()
+        await self._init_webui()
 
     async def terminate(self) -> None:
-        for task in list(self._tasks):
+        for task in list(self._tasks) + list(self._report_tasks):
             task.cancel()
         self._tasks.clear()
+        self._report_tasks.clear()
         self._inflight.clear()
+        await self._remove_cron()
 
     # ------------------------------------------------------------------ 小工具
     def _cfg(self, key: str, default=None):
@@ -178,32 +217,63 @@ class LifespanTheoryPlugin(Star):
             logger.warning(f"[{PLUGIN_NAME}] install_year_minus_age 不是整数，按 14 处理")
             return 14
 
-    def _birth_anchor_year(self, today: date, anchor_age: int) -> int:
+    def _persona_birthday_raw(self, persona_id: str | None) -> str:
+        """多角色独立生日：persona_birthdays[人格id] 优先，其次全局 birthday。"""
+        global_raw = str(self._cfg("birthday", "2012-02-08")).strip()
+        if not persona_id:
+            return global_raw
+        mapping = self._cfg("persona_birthdays", {}) or {}
+        if isinstance(mapping, dict):
+            for key, value in mapping.items():
+                text = str(value or "").strip()
+                if text and str(key) == str(persona_id):
+                    return text
+        return global_raw
+
+    def _birth_anchor_year(
+        self,
+        today: date,
+        anchor_age: int,
+        raw: str | None = None,
+        persona_id: str | None = None,
+    ) -> int:
         """只写 MM-DD 时，出生年在第一次确定后落盘复用。
 
-        否则每年都按「今年 - 锚点年龄」重算出生年，年龄会永远停在锚点岁数，
-        跟「年龄增长」正好相反。配置变了（signature 变化）才重新锚定。
+        多角色各写 MM-DD 时按 (persona_id|raw|anchor_age) 分别记账，否则切换人格
+        会反复重算 anchor、年龄来回抖。配置变了（signature 变化）才重新锚定。
         """
-        raw = str(self._cfg("birthday", "2012-02-08")).strip()
-        signature = f"{raw}|{anchor_age}"
+        text = (
+            raw if raw is not None else str(self._cfg("birthday", "2012-02-08"))
+        ).strip()
+        signature = f"{persona_id or ''}|{text}|{anchor_age}"
         notices = self._load_state().setdefault("notices", {})
-        record = notices.get("birth_anchor")
-        if isinstance(record, dict) and record.get("signature") == signature:
-            try:
-                return int(record.get("year"))
-            except (TypeError, ValueError):
-                pass
+        anchors = notices.get("birth_anchors")
+        if not isinstance(anchors, dict):
+            anchors = {}
+            # 兼容旧版单条 birth_anchor
+            legacy = notices.get("birth_anchor")
+            if isinstance(legacy, dict) and legacy.get("signature"):
+                anchors[str(legacy["signature"])] = legacy.get("year")
+        try:
+            year = int(anchors.get(signature))
+            if year > 0:
+                return year
+        except (TypeError, ValueError):
+            pass
         year = today.year - anchor_age
-        notices["birth_anchor"] = {"signature": signature, "year": year}
+        anchors[signature] = year
+        notices["birth_anchors"] = anchors
         self._save_state()
         return year
 
-    def _birthday(self, today: date | None = None) -> date | None:
+    def _birthday(
+        self, today: date | None = None, persona_id: str | None = None
+    ) -> date | None:
         today = today or self._today()
-        raw = str(self._cfg("birthday", "2012-02-08"))
+        raw = self._persona_birthday_raw(persona_id)
         anchor_age = self._anchor_age()
         anchor_year = (
-            self._birth_anchor_year(today, anchor_age)
+            self._birth_anchor_year(today, anchor_age, raw, persona_id)
             if is_month_day_only(raw)
             else None
         )
@@ -226,11 +296,13 @@ class LifespanTheoryPlugin(Star):
             logger.info(f"[{PLUGIN_NAME}] 已加载年龄档：{path}")
         return self._profiles_cache
 
-    def _resolve_info(self) -> dict | None:
+    def _resolve_info(
+        self, persona_id: str | None = None, today: date | None = None
+    ) -> dict | None:
         """算出这一轮该用的全部信息，算不出来返回 None（配置再离谱也不许让指令/注入连坐）。"""
         try:
-            today = self._today()
-            birth = self._birthday(today)
+            today = today or self._today()
+            birth = self._birthday(today, persona_id)
             if birth is None:
                 logger.warning(f"[{PLUGIN_NAME}] 生日配置解析失败，本轮跳过注入")
                 return None
@@ -407,6 +479,13 @@ class LifespanTheoryPlugin(Star):
         self, event, req=None, force: bool = False
     ) -> tuple[str | None, str]:
         """返回 (persona_id, 人格提示词全文)。优先 config 指定，其次当前会话生效人格。"""
+        if event is None:  # cron 场景：没有当前会话，只能按配置
+            cfg_id = str(self._cfg("persona_id", "") or "").strip()
+            if cfg_id:
+                prompt = await self._fetch_persona_prompt(cfg_id, force=force)
+                if prompt:
+                    return cfg_id, prompt
+            return (cfg_id or None), ""
         cfg_id = str(self._cfg("persona_id", "") or "").strip()
         candidates: list[str] = []
         if cfg_id:
@@ -750,14 +829,35 @@ class LifespanTheoryPlugin(Star):
             logger.warning(f"[{PLUGIN_NAME}] 注入失败，本轮放行：{exc!r}")
 
     async def _prepare_style(
-        self, event, req, info: dict
+        self,
+        event,
+        req,
+        info: dict,
+        persona_id: str | None = None,
+        persona_prompt: str | None = None,
     ) -> tuple[dict | None, str, str]:
-        """返回 (style, key, persona_id)。没就绪时 style=None（用兜底）。"""
-        persona_id, persona_prompt = await self._resolve_persona(event, req)
+        """返回 (style, key, persona_id)。没就绪时 style=None（用兜底）。
+
+        v1.0.0：锁定的档位文案优先于缓存（lock_overrides_cache 可关）。
+        """
+        if persona_prompt is None:
+            persona_id, persona_prompt = await self._resolve_persona(event, req)
         if not persona_prompt:
             return None, "", persona_id or ""
         prompt_h = self._persona_key(persona_id, persona_prompt)
         key = cache_key(persona_id or "", info["tier"], prompt_h)
+        if (
+            extras_mod is not None
+            and self._lock_store is not None
+            and bool(self._cfg("lock_overrides_cache", True))
+        ):
+            try:
+                locked = self._lock_store.get(persona_id or "", tier_key(info["tier"]))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"[{PLUGIN_NAME}] 读锁定档位失败：{exc!r}")
+                locked = None
+            if isinstance(locked, dict) and isinstance(locked.get("style"), dict):
+                return locked["style"], key, persona_id or ""
         mode = str(self._cfg("generation_mode", "background")).strip().lower()
         if mode == "off":
             # off = 纯手写兜底：连旧缓存也不用，与 README/SPEC 保持一致
@@ -786,6 +886,43 @@ class LifespanTheoryPlugin(Star):
                 )
         return None, key, persona_id or ""
 
+    def _inject_options(self) -> dict:
+        if extras_mod is not None:
+            try:
+                options = extras_mod.resolve_injection_options(self.config)
+                if isinstance(options, dict):
+                    return options
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"[{PLUGIN_NAME}] resolve_injection_options 失败：{exc!r}")
+        try:
+            max_chars = int(self._cfg("max_inject_chars", 1200) or 0)
+        except (TypeError, ValueError):
+            max_chars = 1200
+        return {
+            "tone": bool(self._cfg("inject_tone", True)),
+            "manner": bool(self._cfg("inject_manner", True)),
+            "avoid": bool(self._cfg("inject_avoid", True)),
+            "max_chars": max(0, max_chars),
+        }
+
+    def _extra_inject_lines(self, info: dict) -> list[str]:
+        """季节感 + 生日/里程碑特典短句（v1.0.0）。"""
+        if extras_mod is None:
+            return []
+        lines: list[str] = []
+        try:
+            if bool(self._cfg("season_line", False)):
+                lines.extend(extras_mod.season_lines(info["today"], info["birth"]))
+            if bool(self._cfg("milestone_line", True)):
+                special = extras_mod.birthday_special(
+                    info["today"], info["birth"], info["age"], info["base_age"]
+                )
+                if isinstance(special, dict) and special.get("note"):
+                    lines.append(str(special["note"]))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"[{PLUGIN_NAME}] 计算额外注入行失败：{exc!r}")
+        return lines
+
     def _render_block(self, info: dict, style: dict | None, pending: bool = False) -> str:
         return build_block(
             character_name=str(self._cfg("character_name", "德吉可（Dejiko）")),
@@ -799,6 +936,8 @@ class LifespanTheoryPlugin(Star):
             memory_note=bool(self._cfg("memory_note", True)),
             manual=info["manual"],
             pending=pending,
+            inject_options=self._inject_options(),
+            extra_lines=self._extra_inject_lines(info),
         )
 
     def _remember_block(self, event, text: str) -> None:
@@ -837,11 +976,14 @@ class LifespanTheoryPlugin(Star):
                 return
         except AttributeError:
             pass
-        info = self._resolve_info()
+        persona_id, persona_prompt = await self._resolve_persona(event, req)
+        info = self._resolve_info(persona_id)
         if info is None:
             return
 
-        style, key, persona_id = await self._prepare_style(event, req, info)
+        style, key, persona_id = await self._prepare_style(
+            event, req, info, persona_id, persona_prompt
+        )
         pending = style is None and str(self._cfg("generation_mode", "background")).lower() == "background"
         text = self._render_block(info, style, pending=pending)
         if not text:
@@ -855,6 +997,788 @@ class LifespanTheoryPlugin(Star):
             if bool(self._cfg("debug_log", False)):
                 logger.info(f"[{PLUGIN_NAME}] 本轮注入原文：\n{text}")
             self._notice(info, style is not None, key, persona_id)
+            self._maybe_report_first_message(event, info, persona_id)
+
+
+    # ================================================================== v1.0.0 装配
+    def _module_data_dir(self, name: str) -> Path:
+        return self._data_dir() / name
+
+    async def _init_modules(self) -> None:
+        """装配 extras / notebook / yearbook / webui；任何一块失败只降级不拖垮插件。"""
+        if extras_mod is not None:
+            try:
+                self._lock_store = extras_mod.LockStore(self._module_data_dir("locks"))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[{PLUGIN_NAME}] extras 初始化失败：{exc!r}")
+        if _Notebook is not None and bool(self._cfg("notebook_enable", False)):
+            try:
+                self._notebook = _Notebook(
+                    self._module_data_dir("notebook"),
+                    self.config,
+                    llm_call=self._notebook_llm_call,
+                    embed_fn=self._embed_texts,
+                    logger=logger,
+                )
+                logger.info(f"[{PLUGIN_NAME}] 小本本已启用：{self._module_data_dir('notebook')}")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[{PLUGIN_NAME}] 小本本初始化失败：{exc!r}")
+                self._notebook = None
+        if _TemplateStore is not None:
+            try:
+                self._templates = _TemplateStore(
+                    Path(__file__).parent / "templates",
+                    self._module_data_dir("report_templates"),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[{PLUGIN_NAME}] 年报模板仓库初始化失败：{exc!r}")
+                self._templates = None
+        if _YearbookBuilder is not None and self._templates is not None:
+            try:
+                self._yearbook = _YearbookBuilder(
+                    self._module_data_dir("yearbook"),
+                    self._templates,
+                    self.config,
+                    llm_call=self._report_llm_call,
+                    logger=logger,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[{PLUGIN_NAME}] 年报模块初始化失败：{exc!r}")
+                self._yearbook = None
+
+    async def _init_tools(self) -> None:
+        """小本本只写工具：启用时激活，关闭时停用（工具本身注册在类上）。"""
+        enabled = self._notebook is not None and bool(self._cfg("notebook_enable", False))
+        for tool_name in ("notebook_write",):
+            try:
+                if enabled:
+                    await self.context.activate_llm_tool_async(tool_name)
+                else:
+                    await self.context.deactivate_llm_tool_async(tool_name)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"[{PLUGIN_NAME}] 切换工具 {tool_name} 失败：{exc!r}")
+
+    async def _init_cron(self) -> None:
+        manager = getattr(self.context, "cron_manager", None)
+        if manager is None:
+            return
+        jobs: list[tuple[str, str, object]] = []
+        if (
+            self._notebook is not None
+            and bool(self._cfg("notebook_daily_summary_enable", True))
+        ):
+            jobs.append(
+                (
+                    "lifespan_theory_daily_summary",
+                    str(self._cfg("notebook_daily_summary_cron", "0 4 * * *")),
+                    self._cron_daily_summary,
+                )
+            )
+        trigger = str(self._cfg("report_trigger", "both") or "both").lower()
+        if self._yearbook is not None and bool(self._cfg("report_enable", True)) and trigger in ("cron", "both"):
+            jobs.append(
+                (
+                    "lifespan_theory_birthday_report",
+                    str(self._cfg("report_cron", "0 4 * * *")),
+                    self._cron_birthday_report,
+                )
+            )
+        if not jobs:
+            return
+        existing: dict[str, str] = {}
+        try:
+            for job in await manager.list_jobs("basic"):
+                existing[str(getattr(job, "name", ""))] = str(getattr(job, "job_id", ""))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"[{PLUGIN_NAME}] 列出现有 cron 失败：{exc!r}")
+        for name, expr, handler in jobs:
+            try:
+                if name in existing:
+                    await manager.delete_job(existing[name])
+                job = await manager.add_basic_job(
+                    name=name,
+                    cron_expression=expr,
+                    handler=handler,
+                    description="寿命论 v1.0.0 定时任务",
+                    persistent=False,
+                )
+                self._cron_job_ids[name] = str(getattr(job, "job_id", ""))
+                logger.info(f"[{PLUGIN_NAME}] 已注册定时任务 {name}（{expr}）")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[{PLUGIN_NAME}] 注册定时任务 {name} 失败：{exc!r}")
+
+    async def _remove_cron(self) -> None:
+        manager = getattr(self.context, "cron_manager", None)
+        if manager is None:
+            return
+        for name, job_id in list(self._cron_job_ids.items()):
+            try:
+                await manager.delete_job(job_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"[{PLUGIN_NAME}] 删除定时任务 {name} 失败：{exc!r}")
+        self._cron_job_ids.clear()
+
+    async def _init_webui(self) -> None:
+        if webui_mod is None or self._templates is None:
+            return
+        try:
+            routes = webui_mod.register_web_apis(self.context, self._templates, logger=logger)
+            logger.info(f"[{PLUGIN_NAME}] 年报模板页已注册 {len(routes or [])} 个接口")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[{PLUGIN_NAME}] 年报模板页注册失败：{exc!r}")
+
+    # ------------------------------------------------------------------ LLM / embedding
+    async def _llm_generate_text(
+        self,
+        system: str,
+        user: str,
+        *,
+        provider_id: str = "",
+        timeout: float | None = None,
+    ) -> str:
+        pid = str(provider_id or "").strip()
+        if not pid:
+            try:
+                pid = await self._resolve_provider_id("")
+            except Exception:  # noqa: BLE001
+                pid = ""
+        if not pid:
+            try:
+                provider = await self.context.get_using_provider_async(None)
+                config = getattr(provider, "provider_config", None) or {}
+                pid = str(config.get("id") or "") if isinstance(config, dict) else ""
+            except Exception:  # noqa: BLE001
+                pid = ""
+        if not pid:
+            raise RuntimeError("找不到可用的模型 Provider")
+        kwargs = {
+            "chat_provider_id": pid,
+            "prompt": user,
+            "system_prompt": system,
+            "contexts": [],
+        }
+        limit = timeout if timeout else float(self._cfg("generation_timeout", 90) or 90)
+        response = await asyncio.wait_for(
+            self.context.llm_generate(**kwargs), timeout=max(10.0, float(limit))
+        )
+        return str(getattr(response, "completion_text", "") or "")
+
+    async def _notebook_llm_call(self, system: str, user: str) -> str:
+        return await self._llm_generate_text(
+            system,
+            user,
+            provider_id=str(self._cfg("notebook_summary_provider_id", "") or ""),
+            timeout=float(self._cfg("report_timeout", 300) or 300),
+        )
+
+    async def _report_llm_call(self, system: str, user: str) -> str:
+        return await self._llm_generate_text(
+            system,
+            user,
+            provider_id=str(self._cfg("report_llm_provider_id", "") or ""),
+            timeout=float(self._cfg("report_timeout", 300) or 300),
+        )
+
+    async def _embed_texts(self, texts: list[str]):
+        """给 notebook 的 embedding 注入；没有可用 provider 返回 None（模块自行降级）。"""
+        try:
+            providers = self.context.get_all_embedding_providers() or []
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"[{PLUGIN_NAME}] 取 embedding providers 失败：{exc!r}")
+            return None
+        for provider in providers:
+            try:
+                vectors = await provider.get_embeddings(list(texts))
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"[{PLUGIN_NAME}] embedding 调用失败：{exc!r}")
+                continue
+            if vectors:
+                self._embed_provider = provider
+                return vectors
+        return None
+
+    def _spawn(self, coro) -> asyncio.Task:
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
+
+    # ------------------------------------------------------------------ 只写小本本（LLM 工具）
+    @filter.llm_tool(name="notebook_write")
+    async def notebook_write(
+        self,
+        event: AstrMessageEvent,
+        content: str,
+        kind: str = "other",
+        attach_media: bool = False,
+    ) -> str:
+        """主动记下长期有用的、和你自己有关的事，写进你自己的小本本。
+
+        什么时候用：你遇到想长期记住的东西就主动写下来——你喜欢/讨厌的东西、你做过的事、
+        你此刻的心情、你在意的人、你和对方约定好的事（约定要标 kind=commitment）。
+        不要记：闲聊寒暄、一次性信息、命令、工具调用噪声、重复内容（插件会自动去重）、
+        他人的隐私、你没把握的推测。想记之前不用问，直接写。
+
+        Args:
+            content(string): 要记下的内容，一两句具体的话。
+            kind(string): 分类：preference=喜好 / event=做过的事 / mood=心情 / person=在意的人 / commitment=约定或计划 / other=其它。
+            attach_media(boolean): 是否把当前这条消息里的图片/视频一起记下（只在同一条消息里有效）。
+        """
+        if self._notebook is None or not bool(self._cfg("notebook_enable", False)):
+            return "小本本没有启用，这次不记。"
+        try:
+            text_value = str(content or "").strip()
+            if not text_value:
+                return "内容为空，没有记。"
+            media: list[dict] = []
+            if attach_media:
+                try:
+                    media = await self._notebook.capture_event_media(event)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(f"[{PLUGIN_NAME}] 附加媒体失败：{exc!r}")
+                    media = []
+            result = await self._notebook.add(
+                text_value,
+                kind=str(kind or "other").strip().lower(),
+                date=self._today(),
+                media=media or None,
+                source="agent",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[{PLUGIN_NAME}] 小本本写入失败：{exc!r}")
+            return "小本本写入失败，这次没记住。"
+        if result.get("duplicate"):
+            merged = result.get("merged_into")
+            if merged:
+                return f"这条和我本子上已有的记录很像，已经并进 {merged}。"
+            return "这条和我本子上已有的记录很像，不重复记了。"
+        note_id = result.get("id") or "?"
+        return f"记下了（id={note_id}，kind={result.get('kind') or kind}）。"
+
+    # ------------------------------------------------------------------ cron：每日兜底总结
+    async def _cron_daily_summary(self, **_kwargs) -> None:
+        if self._notebook is None:
+            return
+        try:
+            today = self._today()
+            sessions = await self._collect_summary_sessions(today)
+            if not sessions:
+                logger.info(f"[{PLUGIN_NAME}] 每日兜底总结：白名单会话昨天没有可总结的对话")
+                return
+            notes = await self._notebook.daily_summary(today=today, sessions=sessions)
+            logger.info(f"[{PLUGIN_NAME}] 每日兜底总结完成：写入 {len(notes or [])} 条")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[{PLUGIN_NAME}] 每日兜底总结失败：{exc!r}")
+
+    async def _collect_summary_sessions(self, today: date) -> list[dict]:
+        """只读白名单会话（report_whitelist）的对话历史，给每日兜底总结用。"""
+        manager = getattr(self.context, "conversation_manager", None)
+        if manager is None:
+            return []
+        raw_ids = self._cfg("report_whitelist", []) or []
+        if not isinstance(raw_ids, list):
+            return []
+        sessions: list[dict] = []
+        for item in raw_ids:
+            ident = str(item or "").strip()
+            if not ident:
+                continue
+            for umo in (
+                f"aiocqhttp:FriendMessage:{ident}",
+                f"aiocqhttp:GroupMessage:{ident}",
+            ):
+                try:
+                    cid = await manager.get_curr_conversation_id(umo)
+                    if not cid:
+                        continue
+                    conversation = await manager.get_conversation(umo, cid)
+                except Exception:  # noqa: BLE001
+                    continue
+                if conversation is None:
+                    continue
+                messages = self._history_to_messages(getattr(conversation, "history", ""))
+                if messages:
+                    sessions.append({"umo": umo, "messages": messages})
+        return sessions
+
+    @staticmethod
+    def _history_to_messages(history) -> list[dict]:
+        try:
+            data = json.loads(history) if isinstance(history, str) else history
+        except (TypeError, json.JSONDecodeError):
+            return []
+        if not isinstance(data, list):
+            return []
+        out: list[dict] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "")
+            content = item.get("content")
+            if isinstance(content, list):
+                content = " ".join(
+                    str(part.get("text") or "")
+                    for part in content
+                    if isinstance(part, dict) and part.get("type") in (None, "text")
+                )
+            text_value = str(content or "").strip()
+            if role in ("user", "assistant") and text_value:
+                out.append({"role": role, "content": text_value})
+        return out
+
+    # ------------------------------------------------------------------ cron：生日年报
+    async def _cron_birthday_report(self, **_kwargs) -> None:
+        if self._yearbook is None or not bool(self._cfg("report_enable", True)):
+            return
+        persona_id, _ = await self._resolve_persona(None)
+        info = self._resolve_info(persona_id)
+        if info is None or not info.get("is_birthday"):
+            return
+        await self._run_report(info=info, persona_id=persona_id, event=None)
+
+    def _maybe_report_first_message(self, event, info: dict, persona_id: str | None) -> None:
+        """生日当天首条消息触发年报（幂等，一年一次）。"""
+        if self._yearbook is None or not bool(self._cfg("report_enable", True)):
+            return
+        if not info.get("is_birthday"):
+            return
+        trigger = str(self._cfg("report_trigger", "both") or "both").lower()
+        if trigger not in ("first_message", "both"):
+            return
+        notices = self._load_state().setdefault("notices", {})
+        if int(notices.get("last_report_year", 0) or 0) == info["today"].year:
+            return
+        self._spawn(self._run_report(info=info, persona_id=persona_id, event=event))
+
+    def _report_entries(self, info: dict) -> list[dict]:
+        if self._notebook is None:
+            return []
+        today = info["today"]
+        start = today - timedelta(days=365)
+        raw: list[dict] = []
+        for year in sorted({start.year, today.year}):
+            try:
+                raw.extend(self._notebook.load_year(year) or [])
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(f"[{PLUGIN_NAME}] 读取 {year} 年小本本失败：{exc!r}")
+        entries: list[dict] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            date_text = str(entry.get("date") or entry.get("ts") or "")[:10]
+            try:
+                entry_date = date.fromisoformat(date_text)
+            except ValueError:
+                continue
+            if start <= entry_date <= today:
+                entries.append(entry)
+        entries.sort(key=lambda item: str(item.get("date") or ""))
+        return entries
+
+    def _report_media(self, entries: list[dict]) -> list[dict]:
+        if not bool(self._cfg("report_include_media", True)):
+            return []
+        media: list[dict] = []
+        for entry in entries:
+            for item in entry.get("media") or []:
+                if isinstance(item, dict):
+                    media.append(item)
+        try:
+            limit = max(0, int(self._cfg("report_max_media", 12) or 12))
+        except (TypeError, ValueError):
+            limit = 12
+        return media[:limit] if limit else media
+
+    async def _build_yearbook(
+        self, *, info: dict, persona_id: str | None
+    ) -> dict:
+        """生成年报（不发送、不记账），回交给 cron/命令复用。"""
+        entries = self._report_entries(info)
+        media = self._report_media(entries)
+        render_stats = getattr(self._yearbook, "render_stats", None)
+        stats = (
+            render_stats(entries, media)
+            if callable(render_stats)
+            else {"total": len(entries), "media": len(media), "by_kind": {}}
+        )
+        theme_raw = str(self._cfg("report_theme", "random") or "random").strip()
+        return await self._yearbook.build(
+            character_name=str(self._cfg("character_name", "德吉可（Dejiko）")),
+            age=info["age"],
+            year=info["today"].year,
+            stats=stats,
+            entries=entries,
+            media=media,
+            today=info["today"],
+            theme=None if theme_raw in ("", "random") else theme_raw,
+        )
+
+    async def _run_report(
+        self,
+        *,
+        info: dict,
+        persona_id: str | None,
+        event=None,
+        force: bool = False,
+        mark: bool = True,
+    ) -> dict | None:
+        """生成+发送+存档生日年报；自动触发时一年只跑一次。"""
+        notices = self._load_state().setdefault("notices", {})
+        if not force and int(notices.get("last_report_year", 0) or 0) == info["today"].year:
+            return None
+        try:
+            result = await self._build_yearbook(info=info, persona_id=persona_id)
+            if mark:
+                notices["last_report_year"] = info["today"].year
+            notices["last_report_dir"] = str(result.get("dir") or "")
+            self._save_state()
+            logger.info(f"[{PLUGIN_NAME}] 生日年报已生成：{result.get('dir')}")
+            self._prune_old_reports(info["today"].year)
+            sent = await self._send_report(result, event=event)
+            if mark and self._notebook is not None:
+                try:
+                    entries = self._report_entries(info)
+                    ids = [str(entry.get("id")) for entry in entries if entry.get("id")]
+                    if ids:
+                        self._notebook.mark_used_in_report(ids, info["today"])
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(f"[{PLUGIN_NAME}] 标记年报引用失败：{exc!r}")
+            logger.info(f"[{PLUGIN_NAME}] 生日年报发送目标 {len(sent)} 个：{sent}")
+            return result
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[{PLUGIN_NAME}] 生日年报生成失败：{exc!r}")
+            return None
+
+    def _prune_old_reports(self, current_year: int) -> None:
+        """report_keep_years：只保留最近 N 年的年报归档目录。"""
+        try:
+            keep = int(self._cfg("report_keep_years", 5) or 0)
+        except (TypeError, ValueError):
+            keep = 5
+        if keep <= 0:
+            return
+        root = self._module_data_dir("yearbook")
+        if not root.is_dir():
+            return
+        cutoff = current_year - keep + 1
+        import shutil
+
+        for child in root.iterdir():
+            if not child.is_dir():
+                continue
+            try:
+                year = int(child.name)
+            except ValueError:
+                continue
+            if year < cutoff:
+                try:
+                    shutil.rmtree(child, ignore_errors=True)
+                    logger.info(f"[{PLUGIN_NAME}] 已清理旧年报归档：{child.name}")
+                except OSError as exc:  # noqa: BLE001
+                    logger.debug(f"[{PLUGIN_NAME}] 清理旧年报失败：{exc!r}")
+
+    async def _send_report(self, result: dict, *, event=None) -> list[str]:
+        try:
+            targets = self._yearbook.compute_targets(self.config, event) or []
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[{PLUGIN_NAME}] 计算年报发送目标失败：{exc!r}")
+            targets = []
+        if not targets:
+            logger.info(f"[{PLUGIN_NAME}] 年报只存档不发送（没有符合白黑名单的 OneBot 目标）")
+            return []
+        from astrbot.core.message.components import File, Image
+        from astrbot.core.message.message_event_result import MessageChain
+
+        chain_parts = []
+        long_image = result.get("long_image")
+        if long_image and Path(str(long_image)).exists():
+            try:
+                chain_parts.append(Image.fromFileSystem(str(long_image)))
+            except Exception:  # noqa: BLE001
+                pass
+        for page in result.get("pages") or []:
+            if len(chain_parts) >= 10:
+                break
+            if page and Path(str(page)).exists():
+                try:
+                    chain_parts.append(Image.fromFileSystem(str(page)))
+                except Exception:  # noqa: BLE001
+                    pass
+        html_path = result.get("html")
+        if html_path and Path(str(html_path)).exists():
+            try:
+                chain_parts.append(
+                    File(name=Path(str(html_path)).name, file=str(html_path))
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        if not chain_parts:
+            return []
+        chain = MessageChain(chain=chain_parts)
+        sent: list[str] = []
+        for umo in targets:
+            try:
+                ok = await self.context.send_message(umo, chain)
+                if ok:
+                    sent.append(umo)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[{PLUGIN_NAME}] 年报发送到 {umo} 失败：{exc!r}")
+        return sent
+
+    # ------------------------------------------------------------------ v1 新指令实现
+    async def _cmd_lock(self, event, arg: str) -> str:
+        if not self._require_admin(event):
+            return "只有管理员能锁定档位文案喵。"
+        if extras_mod is None or self._lock_store is None:
+            return "extras 模块未就绪，锁定功能不可用喵。"
+        persona_id, persona_prompt = await self._resolve_persona(event)
+        info = self._resolve_info(persona_id)
+        if info is None:
+            return "生日配置解析不了，没法锁定喵。"
+        tier = info["tier"]
+        span = tier_key(tier)
+        style = None
+        if persona_prompt:
+            prompt_h = self._persona_key(persona_id, persona_prompt)
+            style = self._cached_style(cache_key(persona_id or "", tier, prompt_h))
+        if not style:
+            style = {
+                "tone": str(tier.get("tone") or ""),
+                "manner": str(tier.get("manner") or ""),
+                "avoid": str(tier.get("avoid") or ""),
+                "continuity": "",
+            }
+        self._lock_store.set(persona_id or "", span, style)
+        note = "（这一档当时还没有生成内容，锁定的是手写兜底文案）" if not self._cached_style(
+            cache_key(persona_id or "", tier, self._persona_key(persona_id, persona_prompt or ""))
+        ) else ""
+        return f"已锁定 {span} 档的文案（人格 {persona_id or '未知'}）{note}。之后缓存/重新生成都不会覆盖它，/age unlock 解除喵。"
+
+    async def _cmd_unlock(self, event, arg: str) -> str:
+        if not self._require_admin(event):
+            return "只有管理员能解除锁定喵。"
+        if self._lock_store is None:
+            return "锁定功能未就绪喵。"
+        persona_id, _ = await self._resolve_persona(event)
+        target = (arg or "").strip()
+        if target in ("all", "全部"):
+            count = self._lock_store.clear(persona_id or "", None)
+        elif target:
+            count = self._lock_store.clear(persona_id or "", target)
+        else:
+            info = self._resolve_info(persona_id)
+            if info is None:
+                return "生日配置解析不了，没法判断当前档位喵。"
+            count = self._lock_store.clear(persona_id or "", tier_key(info["tier"]))
+        return f"已解除 {count} 个锁定喵。"
+
+    async def _cmd_timeline(self, event) -> str:
+        if extras_mod is None:
+            return "extras 模块未就绪，时间线不可用喵。"
+        persona_id, persona_prompt = await self._resolve_persona(event)
+        info = self._resolve_info(persona_id)
+        if info is None:
+            return "生日配置解析不了，没法生成时间线喵。"
+        try:
+            rows = extras_mod.timeline_entries(
+                self._load_state(), self._profiles(), info["birth"], info["today"]
+            )
+        except Exception as exc:  # noqa: BLE001
+            return f"时间线生成失败：{exc!r}"
+        generated: dict = {}
+        if persona_prompt:
+            prompt_h = self._persona_key(persona_id, persona_prompt)
+            generated = self._entries_for(persona_id or "", prompt_h)
+        lines = [f"年龄时间线（生日 {info['birth'].isoformat()}，今天 {info['today'].isoformat()}）："]
+        for row in rows:
+            span = str(row.get("tier") or "")
+            entry = generated.get(span) if isinstance(generated, dict) else None
+            generated_at = str(entry.get("generated_at") or "") if isinstance(entry, dict) else ""
+            locked = False
+            try:
+                locked = bool(self._lock_store is not None and self._lock_store.is_locked(persona_id or "", span))
+            except Exception:  # noqa: BLE001
+                locked = False
+            is_current = bool(row.get("current"))
+            if not is_current:
+                try:
+                    is_current = int(row.get("age") or -1) == info["age"]
+                except (TypeError, ValueError):
+                    is_current = False
+            mark = " ← 当前" if is_current else ""
+            note = "已生成" if generated_at else "未生成"
+            if locked:
+                note = "已锁定"
+            lines.append(
+                f"{row.get('age')} 岁 · {span} · {row.get('label') or ''} | {note}{mark}"
+            )
+        return "\n".join(lines)
+
+    async def _cmd_export(self, event) -> str:
+        if not self._require_admin(event):
+            return "只有管理员能导出喵。"
+        if extras_mod is None:
+            return "extras 模块未就绪，导出不可用喵。"
+        try:
+            raw = extras_mod.export_styles(self._load_state(), self._profiles())
+        except Exception as exc:  # noqa: BLE001
+            return f"导出失败：{exc!r}"
+        export_dir = self._data_dir() / "exports"
+        try:
+            export_dir.mkdir(parents=True, exist_ok=True)
+            path = export_dir / f"age-styles-{self._today().isoformat()}.json"
+            path.write_text(raw, encoding="utf-8")
+        except OSError as exc:
+            return f"写导出文件失败：{exc!r}"
+        return f"已导出到：\n{path}\n（{len(raw)} 字符；/age import <路径> 可导入）"
+
+    async def _cmd_import(self, event, arg: str) -> str:
+        if not self._require_admin(event):
+            return "只有管理员能导入喵。"
+        if extras_mod is None:
+            return "extras 模块未就绪，导入不可用喵。"
+        target = (arg or "").strip().strip('"')
+        if not target:
+            return "用法：/age import <json 文件路径>（也支持直接贴 JSON）"
+        try:
+            path = Path(target)
+            raw = path.read_text(encoding="utf-8") if path.exists() else target
+        except OSError as exc:
+            return f"读取导入文件失败：{exc!r}"
+        try:
+            imported = extras_mod.import_styles(raw)
+        except ValueError as exc:
+            return f"导入失败：{exc}"
+        cache = imported.get("cache") if isinstance(imported, dict) else None
+        if not isinstance(cache, dict):
+            return "导入失败：文件里没有 cache 数据。"
+        state = self._load_state()
+        bucket = state.setdefault("cache", {})
+        bucket.update(cache)
+        self._save_state()
+        return f"导入成功：合并 {len(cache)} 条，当前缓存 {len(bucket)} 条。"
+
+    async def _cmd_notebook(self, event, arg: str) -> str:
+        if not self._require_admin(event):
+            return "小本本里的内容比较私密，只有管理员能看喵。"
+        if self._notebook is None:
+            return "小本本未启用（配置里打开 notebook_enable 后重启生效）喵。"
+        sub, _, rest = (arg or "").strip().partition(" ")
+        sub = sub.strip().lower()
+        rest = rest.strip()
+        year = int(rest) if rest.isdigit() else self._today().year
+        if sub in ("", "stats", "统计"):
+            try:
+                data = self._notebook.stats(year)
+            except Exception as exc:  # noqa: BLE001
+                return f"统计失败：{exc!r}"
+            return (
+                f"{year} 年小本本：{data.get('total', 0)} 条；"
+                f"分类 {data.get('by_kind') or {}}；媒体 {data.get('media', 0)} 个。"
+            )
+        if sub in ("list", "列表"):
+            try:
+                entries = self._notebook.load_year(year) or []
+            except Exception as exc:  # noqa: BLE001
+                return f"读取失败：{exc!r}"
+            if not entries:
+                return f"{year} 年还没有记录喵。"
+            lines = [f"{year} 年小本本（最多显示 30 条）："]
+            for entry in entries[:30]:
+                lines.append(
+                    f"- {entry.get('date')} [{entry.get('kind')}] {str(entry.get('content') or '')[:80]}"
+                )
+            if len(entries) > 30:
+                lines.append(f"……还有 {len(entries) - 30} 条")
+            return "\n".join(lines)
+        if sub in ("delete", "删除"):
+            if not rest:
+                return "用法：/age notebook delete <YYYY-MM-DD 或 note_id>"
+            try:
+                if len(rest) == 10 and rest[4] == "-":
+                    result = self._notebook.delete(day=date.fromisoformat(rest))
+                else:
+                    result = self._notebook.delete(note_id=rest)
+            except Exception as exc:  # noqa: BLE001
+                return f"删除失败：{exc!r}"
+            return f"已删除 {result.get('deleted', 0)} 条喵。"
+        if sub in ("cleanup", "清理"):
+            if not bool(self._cfg("notebook_cleanup_enable", False)):
+                return "清理功能默认关闭；先在配置里打开 notebook_cleanup_enable 喵。"
+            dry_run = rest not in ("run", "执行", "confirm")
+            try:
+                result = self._notebook.cleanup(today=self._today(), dry_run=dry_run)
+            except Exception as exc:  # noqa: BLE001
+                return f"清理失败：{exc!r}"
+            mode = "预览（未动文件）" if dry_run else "已执行"
+            return (
+                f"清理{mode}：命中 {result.get('matched', 0)} 条，"
+                f"归档 {result.get('archived', 0)}，删除 {result.get('deleted', 0)}，"
+                f"保留 {result.get('kept', 0)}。"
+                + ("\n确认执行：/age notebook cleanup run" if dry_run else "")
+            )
+        if sub in ("reindex", "重建索引"):
+            try:
+                result = await self._notebook.reindex()
+            except Exception as exc:  # noqa: BLE001
+                return f"重建索引失败：{exc!r}"
+            return f"索引重建完成：{result}"
+        if sub in ("export", "导出"):
+            try:
+                raw = self._notebook.export(year)
+            except Exception as exc:  # noqa: BLE001
+                return f"导出失败：{exc!r}"
+            export_dir = self._data_dir() / "exports"
+            try:
+                export_dir.mkdir(parents=True, exist_ok=True)
+                path = export_dir / f"notebook-{year}.json"
+                path.write_text(raw, encoding="utf-8")
+            except OSError as exc:
+                return f"写导出文件失败：{exc!r}"
+            return f"已导出小本本到：\n{path}"
+        return "用法：/age notebook [stats|list|delete|cleanup|reindex|export] [年/日期/id]"
+
+    async def _cmd_yearbook(self, event, arg: str) -> str:
+        if self._yearbook is None:
+            return "年报模块未就绪（检查 yearbook.py / templates 是否存在）喵。"
+        sub, _, rest = (arg or "").strip().partition(" ")
+        sub = sub.strip().lower()
+        rest = rest.strip()
+        if sub in ("templates", "模板"):
+            try:
+                rows = self._templates.list() if self._templates else []
+            except Exception as exc:  # noqa: BLE001
+                return f"读取模板失败：{exc!r}"
+            lines = ["年报模板："]
+            for row in rows:
+                lines.append(f"- {row.get('name')}（{row.get('source')}）{row.get('title') or ''}")
+            return "\n".join(lines)
+        if sub in ("", "help", "帮助"):
+            return (
+                "用法：/age yearbook [preview|send|templates]\n"
+                "preview=只生成不发送；send=生成并发送；模板在 WebUI「年报模板」页管理。"
+            )
+        if sub in ("preview", "预览", "send", "发送"):
+            try:
+                persona_id, _ = await self._resolve_persona(event)
+                info = self._resolve_info(persona_id)
+                if info is None:
+                    return "年龄解析失败，做不了年报喵。"
+                result = await self._build_yearbook(info=info, persona_id=persona_id)
+                path = str(result.get("dir") or "")
+                if sub in ("preview", "预览"):
+                    return (
+                        f"年报已生成（预览：不发送、不占用今年自动年报的名额）：\n{path}\n"
+                        f"主题 {result.get('theme')} · 模式 {result.get('mode')}"
+                    )
+                sent = await self._send_report(result, event=event)
+                return (
+                    f"年报已生成并尝试发送（目标 {len(sent)} 个）：\n{path}\n"
+                    f"主题 {result.get('theme')} · 模式 {result.get('mode')}"
+                )
+            except Exception as exc:  # noqa: BLE001
+                return f"年报生成失败：{exc!r}"
+        return "用法：/age yearbook [preview|send|templates]"
 
     def _notice(self, info: dict, generated: bool, key: str, persona_id: str) -> None:
         """生日当天只打一次日志 + 记下年份；年龄/档位变化时记账。"""
@@ -953,14 +1877,35 @@ class LifespanTheoryPlugin(Star):
         if sub in {"persona", "人格"}:
             yield event.plain_result(await self._cmd_persona(event, arg))
             return
+        if sub in {"lock", "锁定"}:
+            yield event.plain_result(await self._cmd_lock(event, arg))
+            return
+        if sub in {"unlock", "解锁"}:
+            yield event.plain_result(await self._cmd_unlock(event, arg))
+            return
+        if sub in {"timeline", "时间线"}:
+            yield event.plain_result(await self._cmd_timeline(event))
+            return
+        if sub in {"export", "导出"}:
+            yield event.plain_result(await self._cmd_export(event))
+            return
+        if sub in {"import", "导入"}:
+            yield event.plain_result(await self._cmd_import(event, arg))
+            return
+        if sub in {"notebook", "小本本"}:
+            yield event.plain_result(await self._cmd_notebook(event, arg))
+            return
+        if sub in {"yearbook", "年报"}:
+            yield event.plain_result(await self._cmd_yearbook(event, arg))
+            return
         yield event.plain_result(await self._cmd_status(event))
 
     # ---- 子指令实现
     async def _cmd_status(self, event) -> str:
-        info = self._resolve_info()
+        persona_id, persona_prompt = await self._resolve_persona(event)
+        info = self._resolve_info(persona_id)
         if info is None:
             return "生日配置解析不了，看看 /age set 不了的话先去配置面板检查 birthday 是不是 YYYY-MM-DD 喵。"
-        persona_id, persona_prompt = await self._resolve_persona(event)
         lines = [
             f"今天是 {info['today'].isoformat()}，年龄 {info['age']} 岁"
             + ("（手动覆盖）" if info["manual"] else "")
@@ -987,14 +1932,19 @@ class LifespanTheoryPlugin(Star):
         else:
             lines.append("人格：未识别（检查 persona_id 或 prompt_override），当前只用年龄档手写兜底文。")
         lines.append(f"生成模式：{mode}；注入位置：{self._cfg('inject_mode', 'extra_user_content')}。")
+        lines.append(
+            f"小本本：{'开' if self._notebook else '关'}；"
+            f"年报：{'开' if (self._yearbook and bool(self._cfg('report_enable', True))) else '关'}；"
+            f"锁定：{'开' if self._lock_store else '不可用'}。"
+        )
         lines.append("输入 /age help 看全部指令喵。")
         return "\n".join(lines)
 
     async def _cmd_show(self, event) -> str:
-        info = self._resolve_info()
+        persona_id, persona_prompt = await self._resolve_persona(event)
+        info = self._resolve_info(persona_id)
         if info is None:
             return "生日配置解析不了，没法预览注入内容喵。"
-        persona_id, persona_prompt = await self._resolve_persona(event)
         style = None
         pending = False
         key = ""
@@ -1012,9 +1962,9 @@ class LifespanTheoryPlugin(Star):
         return header + text
 
     async def _cmd_tiers(self, event) -> str:
-        info = self._resolve_info()
-        profiles = self._profiles()
         persona_id, persona_prompt = await self._resolve_persona(event)
+        info = self._resolve_info(persona_id)
+        profiles = self._profiles()
         generated: dict = {}
         if persona_prompt:
             prompt_h = self._persona_key(persona_id, persona_prompt)
@@ -1045,7 +1995,7 @@ class LifespanTheoryPlugin(Star):
         if not persona_prompt:
             return "没取到人格提示词，没法体检。先用 /age prompt 排查 persona_id / prompt_override。"
         report = core.lint_persona_style(persona_prompt)
-        info = self._resolve_info()
+        info = self._resolve_info(persona_id)
         head = (
             f"人设年龄体检 · 人格：{persona_id or '未知（prompt_override）'} · "
             f"提示词 {len(persona_prompt)} 字\n"
@@ -1075,7 +2025,8 @@ class LifespanTheoryPlugin(Star):
         return "\n".join(lines)
 
     async def _cmd_preview(self, event, arg: str) -> str:
-        info = self._resolve_info()
+        persona_id, _ = await self._resolve_persona(event)
+        info = self._resolve_info(persona_id)
         if info is None:
             return "生日配置解析不了，没法预览喵。"
         arg = (arg or "").strip()
@@ -1129,10 +2080,10 @@ class LifespanTheoryPlugin(Star):
     async def _cmd_generate(self, event, arg: str) -> str:
         if not self._require_admin(event):
             return "只有管理员能触发重新生成喵。"
-        info = self._resolve_info()
+        persona_id, persona_prompt = await self._resolve_persona(event)
+        info = self._resolve_info(persona_id)
         if info is None:
             return "生日配置解析不了，没法生成喵。"
-        persona_id, persona_prompt = await self._resolve_persona(event)
         if not persona_prompt:
             return "没取到人格提示词，生成不了。先用 /age prompt 排查一下。"
         profiles = self._profiles()
@@ -1302,6 +2253,12 @@ class LifespanTheoryPlugin(Star):
             "/age clear — 清空生成缓存（管理员）\n"
             "/age mode background|sync|manual|off — 生成模式（管理员）\n"
             "/age persona <id|auto> — 绑定/自动识别人格（管理员）\n"
+            "/age lock [unlock] — 锁定/解除当前档位文案（管理员）\n"
+            "/age timeline — 年龄时间线与各档生成/锁定状态\n"
+            "/age export | /age import <路径> — 导出/导入生成缓存（管理员）\n"
+            "/age notebook [stats|list|delete|cleanup|export] — 只写小本本管理（管理员）\n"
+            "/age yearbook [preview|send|templates] — 生日年报（管理员）\n"
             "/age set <年龄> | /age reset — 手动覆盖年龄（管理员）\n"
-            "/age on | /age off — 总开关（管理员）"
+            "/age on | /age off — 总开关（管理员）\n"
+            "（年报模板在 AstrBot 插件页「寿命论 → 年报模板」里编辑/导入）"
         )
