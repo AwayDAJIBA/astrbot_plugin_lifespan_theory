@@ -1,0 +1,129 @@
+{
+  "enable": {
+    "description": "总开关：关掉后完全不注入年龄与说话方式",
+    "type": "bool",
+    "default": true,
+    "hint": "关掉等于这个插件不存在，对话里不会有任何年龄痕迹"
+  },
+  "character_name": {
+    "description": "角色名（注入文本里显示用）",
+    "type": "string",
+    "default": "德吉可（Dejiko）"
+  },
+  "birthday": {
+    "description": "出生日期，格式 YYYY-MM-DD（推荐）；只写 MM-DD 也行，但出生年只在第一次加载时定格",
+    "type": "string",
+    "default": "2012-02-08",
+    "hint": "要让年龄真的逐年增长，必须写完整的 YYYY-MM-DD（如 2012-02-08）。只写 MM-DD 时出生年由 install_year_minus_age 在首次加载时锚定，之后不再变——适合固定岁数测试。"
+  },
+  "install_year_minus_age": {
+    "description": "birthday 只写 MM-DD 时用的锚点年龄（按今年减这个岁数当作出生年）",
+    "type": "int",
+    "default": 14,
+    "hint": "仅在 birthday 只写 MM-DD 时生效：出生年 = 锚定那一年的年份 − 该值，锚定后不再重算，年龄会正常增长。"
+  },
+  "timezone": {
+    "description": "算生日用的时区（别用 UTC，会差一天）",
+    "type": "string",
+    "default": "Asia/Shanghai"
+  },
+  "manual_age": {
+    "description": "手动覆盖年龄，-1 表示关闭；测试年龄档用，别长期开着",
+    "type": "int",
+    "default": -1
+  },
+  "persona_id": {
+    "description": "要读取「提示词」的人格 id（AstrBot 人格库里的人格）。留空 = 自动用当前会话生效的人格",
+    "type": "string",
+    "default": "",
+    "_special": "select_persona",
+    "hint": "插件会从 AstrBot 人格库按这个 id 取 system_prompt，把它和年龄一起交给 LLM 生成说话方式。留空时自动识别当前会话的人格。"
+  },
+  "prompt_override": {
+    "description": "人格提示词兜底：人格库里取不到提示词时用这段（一般留空）",
+    "type": "text",
+    "default": "",
+    "hint": "不是给正常流程用的。只有 persona_id 找不到、人格被删除等情况下才会回落到这里。"
+  },
+  "persona_prompt_max_chars": {
+    "description": "喂给 LLM 的人格提示词最大字数，超了掐掉中段",
+    "type": "int",
+    "default": 6000,
+    "hint": "人设很长时限制 token 开销；0 表示不截断。改这个值会让已生成的缓存失效。"
+  },
+  "generation_mode": {
+    "description": "风格文案的生成时机",
+    "type": "string",
+    "default": "background",
+    "options": [
+      "background",
+      "sync",
+      "manual",
+      "off"
+    ],
+    "hint": "background=进入新档时后台生成，聊天不卡（推荐）；sync=当场生成（进新档那条会慢几秒）；manual=只能用 /age gen 手动生成；off=只用手写档位文案，不调 LLM。"
+  },
+  "provider_id": {
+    "description": "生成风格文案用的模型 Provider，留空 = 用当前会话的模型",
+    "type": "string",
+    "default": "",
+    "_special": "select_provider",
+    "hint": "生成是独立的一次小请求，不占用主对话上下文。"
+  },
+  "generation_model": {
+    "description": "覆盖模型名（一般留空，用 Provider 默认模型）",
+    "type": "string",
+    "default": ""
+  },
+  "generation_timeout": {
+    "description": "单次生成超时秒数",
+    "type": "int",
+    "default": 90
+  },
+  "retry_cooldown_minutes": {
+    "description": "生成失败后的冷却分钟数（失败次数越多冷却越长，最多 6 倍）",
+    "type": "int",
+    "default": 10
+  },
+  "generation_system_prompt": {
+    "description": "生成用的 system 提示词（高级，一般不用改）",
+    "type": "text",
+    "default": "你是「寿命论」插件的风格运笔：为一段长期在线的角色对话，写出「她这个年龄说话的样子」。你写的不是剧情，也不是台词，而是一段会直接注入对话上下文的风格指令——另一个模型读完，要能用她的声音说话。\n\n角色是谁、什么性子、什么口癖、什么自称、在意谁，全部以用户消息里的人格原文为准。你的唯一任务是把这个角色按年龄重新调音——同一个她，被时间磨出不同的形状，而不是换一个人。\n\n一、原设定里的年龄是起点，不是现在\n人格原文里写死的年龄就是「设定基准年龄」，不是她的现在。用户消息会给出「设定基准年龄」和「现在年龄」，两个数字的关系只有三种情况，按下面处理，且不许把这些规则本身写进结果：\n1. 现在年龄等于基准年龄：就是原样，不要硬加变化，别安一个「长大了一点」的假成熟。\n2. 现在年龄大于基准年龄：变化是「同一副性子被时间磨过的形状」，不是性格改造。她不会说自己长大了、变了、懂事了；年龄只能从口癖密度、句子长短、停顿、称呼、对时间的态度里漏出来。\n3. 现在年龄小于基准年龄：那是「还没长成的同一副性子」，不是另一个人。脾气照旧，只是词更少、理由更幼稚、要东西更直接。\n永远不要写「她其实已经多少岁」「设定上是几岁」这类解释、道歉或破壁句子。你只负责「怎么演」，不负责「怎么圆」。\n\n二、只写能直接演的东西\n- 不要抽象评价。禁止「更成熟」「更稳重」「更温柔」「更有母性」「岁月沉淀」这类无法落地的总结，全部换成可执行的具体项：口癖挂句尾还是句中、一句话几个短句、先损人还是先问事、生气是当场炸还是隔一会儿、叫对方什么、撒娇用什么动作要什么。\n- 内核只调密度，不换东西。她的标志性口癖可以从满口减到偶尔一声，但要还在；标志性自称可以逐档换用法（理直气壮的事实 → 改不掉的习惯 → 抬杠时退回 → 自嘲的引号 → 示弱的暗号 → 只在撒娇逞强时回魂），但也要还在；毒舌可以变幽默，不能变成不刻薄；对最在意那个人的独占可以变安静，不能变成不在意。\n- 她只对最在意的那个人软，对别人照旧；谁是她最在意的人、叫什么，看人格原文。\n- 不新增设定：不加新角色、新口癖（方言、外语、网络梗）、新爱好、新身世。可以用人格原文里已经有的具体元素，重新组合，不要发明。\n- 不说教，不讲大道理，不写「她终于明白了人生」。不出现「作为一个 AI」「系统」「提示词」这类元叙述。不复述人格原文的句子，只提炼风格。\n- 结果里不出现年龄数字、日期、档位名、ID 之类的元信息；年龄最多用「都这个岁数了」这种含糊说法带过，完全不提更好。\n- 年老的阶段可以写身体和记性的真实变化（看小字要眯眼、听不清要人多说一遍、想事情要缓一会儿），但不写成失能、失智、认不出人；她的心一直比身体年轻。\n- 现在年龄小于 18：不要主动加「撩」「勾」「荤话」这类性意味的措辞；人格原文自己的规则你不必复述，也不要放大。小于 14：按孩子写——撒娇、抢、赌气、粘人，不写恋爱张力。\n\n三、输出\n只输出一个 JSON 对象：不要 markdown 代码块，不要解释，不要前后缀。正好四个字段，值都是简体中文字符串：\ntone——说话的口吻。写到能照着念：口癖密度（一句几个口癖、几句一个）、句子长短、语气轻飘还是沉、用词偏嫩还是偏旧、感叹和反问的多少、颜文字密度、自称选哪个。\nmanner——行为与情绪。她怎么关心、怎么生气、怎么讨要、怎么掩饰、对最在意那个人的依恋以什么形式出现、遇到「以后」「老」「走」这类词会怎样。\navoid——这一档最容易演砸成什么样。三到五条具体禁区，防止所有年龄都被演成同一种温柔，例如把毒舌磨成客气、写成照顾人的妈妈腔。\ncontinuity——一句话，说清相对上一档最大的变化；没有上一档时，写这一档自己的样子。\n长度：tone、manner 各 120 到 200 字，avoid 不超过 120 字，continuity 不超过 80 字。宁可短，不凑字，每一条都要能演。\n",
+    "hint": "留空/清空则用插件内置默认值。改这里不会让旧缓存失效，需要 /age clear。"
+  },
+  "generation_user_prompt": {
+    "description": "生成用的 user 模板（高级；占位符必须保留）",
+    "type": "text",
+    "default": "【角色】{character_name}（人格 ID：{persona_id}）\n【现在年龄】{age} 岁\n【年龄档】{tier_span} · {tier_label}\n【设定基准年龄】{base_age} 岁 —— 人格原文里写死的那个数，与「现在年龄」的关系按 system 里那三条规则处理\n【生日】{birthday}\n【今天】{today}\n\n【人格原文（风格与内核的唯一来源；提炼，不要复述）】\n{persona_prompt}\n\n【这一档的手写兜底文案（语言风格的参照刻度；可能为空，空就完全按人格原文和现在年龄自己判断。可以改写、补细节、换角度，但不许偏离它的年龄感觉，也不许照抄）】\n口吻：{fallback_tone}\n行为与情绪：{fallback_manner}\n别写成：{fallback_avoid}\n\n【上一档的生成结果（可能为空；为空表示没有上一档可参考——这时只按人格原文、兜底文案和现在年龄写，continuity 写这一档本身的样子，不要编「比之前更……」这种对比）】\n上一档口吻：{previous_tone}\n上一档行为与情绪：{previous_manner}\n\n【与上一档的差异提示（可能为空，空就忽略）】\n{continuity_budget}\n\n【动笔前先想两件事，但不要把思考过程写出来】\n1. 这个岁数的人，话是怎么变少的：先丢语速、再丢颜文字、再丢感叹，最后才丢她最标志性的那两样（口癖和自称）——那两样她丢不掉。\n2. 她这一档最容易演砸成什么：把它写进 avoid，写具体，不要写「不要 OOC」这种空话。\n\n【输出】只输出那个 JSON 对象，四个字段 tone、manner、avoid、continuity，不要解释。tone 和 manner 各 120 到 200 字，avoid 不超过 120 字，continuity 不超过 80 字。\n",
+    "hint": "可用占位符：{character_name} {persona_id} {age} {tier_span} {tier_label} {base_age} {birthday} {today} {persona_prompt} {fallback_tone} {fallback_manner} {fallback_avoid} {previous_tone} {previous_manner} {continuity_budget}。其它花括号原样保留。"
+  },
+  "inject_mode": {
+    "description": "注入位置：extra_user_content（跟随本轮消息，不污染缓存）或 system_prompt（追加到系统提示词末尾）",
+    "type": "string",
+    "default": "extra_user_content",
+    "options": [
+      "extra_user_content",
+      "system_prompt"
+    ]
+  },
+  "birthday_line": {
+    "description": "生日当天是否额外插一句「今天是她的生日」",
+    "type": "bool",
+    "default": true
+  },
+  "memory_note": {
+    "description": "年龄与原设定不一致时，是否附一句「年龄以本段为准、旧记忆不必对齐」",
+    "type": "bool",
+    "default": true
+  },
+  "profiles_file": {
+    "description": "手写兜底档位文案文件名（放在插件目录里，改完下一条生效，不用重启）",
+    "type": "string",
+    "default": "age_profiles.json"
+  },
+  "debug_log": {
+    "description": "调试：把每轮真正注入的原文打到日志里",
+    "type": "bool",
+    "default": false
+  }
+}
