@@ -2,7 +2,7 @@ name: astrbot_plugin_lifespan_theory
 display_name: 寿命论
 desc: 给角色设出生日期，年龄按真实日历现算；按年龄档用 LLM 结合人格提示词生成说话方式并注入上下文；另有「只写小本本」与「生日年报」（本地渲染长图/分页/HTML，QQ OneBot 白黑名单发送）。
 help: 功能：①年龄增长（生日现算、多角色独立生日、闰日/时区处理）②随年龄改变注入（档位生成+缓存+锁定+注入强度+季节/里程碑）③只写小本本（agent 主动记+语义去重+媒体+每日兜底总结+清理默认关，只写不读，生日年报才用）④生日年报（三模式文案、4 套模板随机、本地 Playwright/Pillow 渲染长图+分页+存档 HTML、QQ OneBot 白黑名单）。指令 /age 或 /寿命论；年报模板在插件页管理。使用前请读 README 的「使用前必读」「大模型生成声明」「陪伴型 Agent 使用声明」。
-version: v1.0.0
+version: v1.0.1
 author: Dejiko
 repo: "https://github.com/AwayDAJIBA/astrbot_plugin_lifespan_theory"
 astrbot_version: ">=4.5.0"

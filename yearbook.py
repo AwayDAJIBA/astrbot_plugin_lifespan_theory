@@ -39,7 +39,7 @@ import re
 import shutil
 import time
 import zipfile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
@@ -435,20 +435,12 @@ def _now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _iso_now() -> str:
-    return datetime.now().isoformat(timespec="seconds")
-
-
 def _weekday_text(day: date) -> str:
     return WEEKDAY_LABELS[day.weekday()]
 
 
 def _cn_date_text(day: date) -> str:
     return f"{day.year} 年 {day.month} 月 {day.day} 日"
-
-
-def _month_label(month: int) -> str:
-    return MONTH_LABELS[month - 1] if 1 <= month <= 12 else ""
 
 
 def _short_error(exc: BaseException, limit: int = 160) -> str:
@@ -1084,6 +1076,15 @@ class YearbookBuilder:
     def _cfg_bool(self, key: str, default: bool) -> bool:
         return _safe_bool(self._cfg(key, default), default)
 
+    def render_stats(self, entries: Any, media: Any = None) -> dict:
+        """实例方法版 :func:`render_stats`。
+
+        为什么有这一层：main.py 会 ``getattr(self._yearbook, "render_stats")`` 取统计
+        再传回 ``build(stats=...)``，模块级函数挂在类上对调用方更顺手；内部仍是同一
+        个纯函数，不产生第二套统计口径。
+        """
+        return render_stats(entries, media)
+
     def _log(self, level: int, message: str) -> None:
         """日志永远不能反过来拖死年报。"""
         try:
@@ -1130,7 +1131,7 @@ class YearbookBuilder:
 
         # 1) 清洗输入 + 统计
         all_entries = normalize_entries(entries)
-        scoped_entries = self._scope_entries(all_entries, year)
+        scoped_entries = self._scope_entries(all_entries, year, today)
         media_ctx = self._prepare_media(media, dir_path, errors)
         stats_obj = render_stats(scoped_entries, media)
         if isinstance(stats, dict):
@@ -1237,12 +1238,33 @@ class YearbookBuilder:
     # 条目 / 媒体 / 统计
     # ------------------------------------------------------------------
     @staticmethod
-    def _scope_entries(entries: list[dict], year: int) -> list[dict]:
-        """只保留这一年的条目；如果全都没有年份，就全留下（数据本身不带年份）。"""
+    def _scope_entries(entries: list[dict], year: int, today: date | None = None) -> list[dict]:
+        """挑出属于这份年报的条目。
+
+        主路径是「报告年」；但生日常在年初，调用方（main.py）习惯把「过去 365 天」
+        的窗口整段传进来——窗口里会混着去年 12 月的内容。所以除了 ``year`` 年，也
+        接受 ``today`` 往前 366 天内的上一年条目，避免年初的生日把跨年那几页吞掉。
+        全都没有日期时（数据本身不带日期）全留下。
+        """
         dated = [entry for entry in entries if entry["year"] is not None]
         if not dated:
             return list(entries)
-        scoped = [entry for entry in entries if entry["year"] in (None, year)]
+        window_start = (today - timedelta(days=366)) if isinstance(today, date) else None
+        scoped: list[dict] = []
+        for entry in entries:
+            if entry["year"] is None:
+                scoped.append(entry)
+                continue
+            if entry["year"] == year:
+                scoped.append(entry)
+                continue
+            if window_start is not None and entry["date"]:
+                try:
+                    entry_date = date.fromisoformat(entry["date"])
+                except ValueError:
+                    entry_date = None
+                if entry_date is not None and window_start <= entry_date <= today:
+                    scoped.append(entry)
         return scoped or list(entries)
 
     @staticmethod
@@ -1525,8 +1547,8 @@ class YearbookBuilder:
         last_date = stats.get("last_date")
         busiest_label = stats.get("busiest_month_label") or ""
         busiest_count = _safe_int(stats.get("busiest_month_count"), 0, lo=0)
-        first_text = self._iso_to_cn(first_date)
-        last_text = self._iso_to_cn(last_date)
+        first_text = self._iso_to_cn(first_date, year)
+        last_text = self._iso_to_cn(last_date, year)
         kinds = stats.get("kinds") or []
         kind_text = "、".join(f"{item['label']} {item['count']} 条" for item in kinds[:4]) if kinds else ""
         title = _clean_text(f"{character_name}的 {year}", 40)
@@ -1605,13 +1627,16 @@ class YearbookBuilder:
         return max(entries, key=lambda entry: len(entry["text"]), default=None)
 
     @staticmethod
-    def _iso_to_cn(raw: Any) -> str:
+    def _iso_to_cn(raw: Any, report_year: int | None = None) -> str:
+        """ISO 日期 → 中文短日期；跨年（去年 12 月）时带上年份，避免读成倒序。"""
         if not raw:
             return ""
         try:
             day = date.fromisoformat(str(raw))
         except (TypeError, ValueError):
             return ""
+        if report_year is not None and day.year != report_year:
+            return f"{day.year} 年 {day.month} 月 {day.day} 日"
         return f"{day.month} 月 {day.day} 日"
 
     def _parse_llm_copy(self, raw_text: str, fallback: dict) -> dict | None:

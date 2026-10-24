@@ -112,7 +112,7 @@ provider 的报错正文可能回显请求片段，而请求里含人格提示�
     PLUGIN_NAME,
     "Dejiko",
     "按生日现算角色年龄；年龄进入新档时用 LLM 把人格提示词与年龄综合成说话方式注入上下文，让人设随年龄自然生长。",
-    "1.0.0",
+    "1.0.1",
 )
 class LifespanTheoryPlugin(Star):
     def __init__(self, context: Context, config: dict | None = None):
