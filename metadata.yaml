@@ -2,7 +2,7 @@ name: astrbot_plugin_lifespan_theory
 display_name: 寿命论
 desc: 给角色设一个出生日期，年龄按真实日历现算；每进入一个新的年龄档，后台用 LLM 把「AstrBot 人格库里的系统提示词 + 当前年龄」综合成这个年龄的说话方式，注入到对话上下文里，让 agent 的口吻随年龄一点点改变，而不是永远停在人设写死的那一岁。
 help: 默认生日 2012-02-08（对应 14 岁），人格提示词默认自动取当前会话的人格，也可在配置里按 persona_id 指定。年龄永远由「生日 → 今天」纯函数算出，不累加，重启/重复加载都不会漂。风格文案按 (人格, 年龄档, 人格提示词哈希) 缓存并落盘，跨档才切换、档内不动；生成好之前用手写档位文案兜底，不阻塞聊天。指令 /age 或 /寿命论 查看状态，/age show 看注入原文，/age tiers 看各档生成进度，/age gen 手动重生成，/age persona 绑定人格，/age set N 手动测试年龄，/age on|off 开关。
-version: v0.1.1
+version: v0.1.2
 author: Dejiko
 repo: "https://github.com/AwayDAJIBA/astrbot_plugin_lifespan_theory"
 astrbot_version: ">=4.5.0"
