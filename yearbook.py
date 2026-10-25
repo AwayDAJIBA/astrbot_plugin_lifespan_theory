@@ -32,7 +32,6 @@ import asyncio
 import inspect
 import io
 import json
-import logging
 import os
 import random
 import re
@@ -46,6 +45,11 @@ from typing import Any, Callable
 from jinja2 import Environment, TemplateSyntaxError
 from jinja2 import meta as jinja_meta
 from jinja2 import nodes as jinja_nodes
+
+try:  # 日志统一走 AstrBot 的 logger（平台安全审查要求，禁止使用标准库日志模块）
+    from .log_bridge import DEBUG, ERROR, INFO, WARNING, get_logger
+except ImportError:  # pragma: no cover - 单测直接 import yearbook 的场景
+    from log_bridge import DEBUG, ERROR, INFO, WARNING, get_logger  # type: ignore[no-redef]
 
 # ---------------------------------------------------------------------------
 # 常量
@@ -1058,7 +1062,7 @@ class YearbookBuilder:
         self.templates = templates
         self.cfg = cfg if isinstance(cfg, dict) else {}
         self.llm_call = llm_call if callable(llm_call) else None
-        self.logger = logger or logging.getLogger("astrbot")
+        self.logger = get_logger(logger)
 
     # ------------------------------------------------------------------
     # 配置读取
@@ -1227,7 +1231,7 @@ class YearbookBuilder:
         }
         self._write_meta(dir_path, result)
         self._log(
-            logging.INFO,
+            INFO,
             f"年报已生成：{year} 年 / {age} 岁 / 模式 {mode_used} / 主题 {theme_name} / "
             f"引擎 {result['engine']} / 条目 {result['entries_shown']} / "
             f"媒体 {result['media_count']} / 耗时 {result['elapsed_ms']}ms",
@@ -1438,15 +1442,15 @@ class YearbookBuilder:
             parsed = self._parse_llm_copy(raw_text, template_copy)
         except asyncio.TimeoutError:
             warnings.append(f"文案模型超时（>{llm_timeout}s），退回纯模板")
-            self._log(logging.WARNING, f"年报文案模型超时（{llm_timeout}s）")
+            self._log(WARNING, f"年报文案模型超时（{llm_timeout}s）")
             return template_copy, "template", requested, False, tokens
         except Exception as exc:  # noqa: BLE001 模型失败绝不能拖死年报
             warnings.append(f"文案模型失败（{_short_error(exc)}），退回纯模板")
-            self._log(logging.WARNING, f"年报文案模型失败：{_short_error(exc)}")
+            self._log(WARNING, f"年报文案模型失败：{_short_error(exc)}")
             return template_copy, "template", requested, False, tokens
         if parsed is None:
             warnings.append("文案模型返回无法解析为 JSON，退回纯模板")
-            self._log(logging.WARNING, "年报文案模型返回无法解析，退回纯模板")
+            self._log(WARNING, "年报文案模型返回无法解析，退回纯模板")
             return template_copy, "template", requested, False, tokens
         return parsed, requested, requested, True, tokens
 
@@ -1842,7 +1846,7 @@ class YearbookBuilder:
             except Exception as exc:  # noqa: BLE001
                 message = f"template:{theme_name}:{_short_error(exc)}"
                 errors.append(message)
-                self._log(logging.WARNING, f"模板渲染失败，尝试兜底：{message}")
+                self._log(WARNING, f"模板渲染失败，尝试兜底：{message}")
         for candidate in ("minimal", "journal", "film", "birthday"):
             try:
                 return self.templates.render(candidate, context), candidate
@@ -1883,16 +1887,16 @@ class YearbookBuilder:
                 return {**rendered, "engine": "playwright"}
             except Exception as exc:  # noqa: BLE001 浏览器缺失/被墙/超时都降级
                 errors.append(f"playwright:{_short_error(exc)}")
-                self._log(logging.WARNING, f"Playwright 渲染失败，降级 Pillow：{_short_error(exc)}")
+                self._log(WARNING, f"Playwright 渲染失败，降级 Pillow：{_short_error(exc)}")
         if want_pillow:
             try:
                 rendered = await asyncio.to_thread(self._render_pillow, dir_path, errors, context)
                 return {**rendered, "engine": "pillow"}
             except Exception as exc:  # noqa: BLE001 Pillow 不可用/字体异常 → 只出 HTML
                 errors.append(f"pillow:{_short_error(exc)}")
-                self._log(logging.WARNING, f"Pillow 渲染失败，只保留 HTML：{_short_error(exc)}")
+                self._log(WARNING, f"Pillow 渲染失败，只保留 HTML：{_short_error(exc)}")
         if engine_requested == "html":
-            self._log(logging.INFO, "按配置只输出 HTML（不生成图片）")
+            self._log(INFO, "按配置只输出 HTML（不生成图片）")
         return {"long": None, "pages": [], "engine": "html"}
 
     async def _render_playwright(self, html_path: Path, dir_path: Path) -> dict:
@@ -1955,7 +1959,7 @@ class YearbookBuilder:
                 long_bytes = await long_page.screenshot(full_page=True)
                 long_path.write_bytes(long_bytes)
                 self._log(
-                    logging.DEBUG,
+                    DEBUG,
                     f"Playwright 长图：{REPORT_WIDTH * long_scale}x{total_height * long_scale}",
                 )
                 blocks = await long_page.evaluate(
@@ -2126,7 +2130,7 @@ class YearbookBuilder:
             layout.footer(context)
         except Exception as exc:  # noqa: BLE001 单块画失败不该整张放弃
             errors.append(f"pillow-layout:{_short_error(exc)}")
-            self._log(logging.WARNING, f"Pillow 排版部分失败，继续画：{_short_error(exc)}")
+            self._log(WARNING, f"Pillow 排版部分失败，继续画：{_short_error(exc)}")
         image = layout.render()
         long_path = dir_path / "report-long.png"
         image.save(long_path, format="PNG")
@@ -2135,7 +2139,7 @@ class YearbookBuilder:
         if not layout.fonts.cjk_found:
             errors.append("pillow: 没找到中文字体，中文可能显示为方块（需安装微软雅黑/Noto Sans CJK）")
         if layout.fonts.cjk_found:
-            self._log(logging.INFO, f"Pillow 长图：{image.width}x{image.height}")
+            self._log(INFO, f"Pillow 长图：{image.width}x{image.height}")
         return {"long": long_path, "pages": pages}
 
     def _slice_image(self, image: Any, pages_dir: Path, max_pages: int, page_height: int = REPORT_PAGE_HEIGHT) -> list[Path]:

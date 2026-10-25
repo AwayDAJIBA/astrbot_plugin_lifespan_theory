@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import copy
 import json
-import logging
 import re
 import threading
 from datetime import date, datetime
@@ -38,7 +37,12 @@ try:  # 作为包的一部分 import（main.py / 单测都这么用）
 except ImportError:  # pragma: no cover - 允许直接 python extras.py 自检的场景
     import lifespan_core as core  # type: ignore[no-redef]
 
-LOGGER = logging.getLogger("astrbot_plugin_lifespan_theory.extras")
+try:  # 日志统一走 AstrBot 的 logger（平台安全审查要求，禁止使用标准库日志模块）
+    from .log_bridge import get_logger
+except ImportError:  # pragma: no cover - 直接 python extras.py 自检的场景
+    from log_bridge import get_logger  # type: ignore[no-redef]
+
+LOGGER = get_logger()
 
 PLUGIN_NAME = "astrbot_plugin_lifespan_theory"
 # 导出格式版本：字段不兼容变化时 +1，导入端根据它决定能不能读。

@@ -34,7 +34,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import logging
 import math
 import re
 import shutil
@@ -48,9 +47,13 @@ from pathlib import Path
 
 from typing import Any, Awaitable, Callable, Iterator
 
+try:  # 日志统一走 AstrBot 的 logger（平台安全审查要求，禁止使用标准库日志模块）
+    from .log_bridge import get_logger
+except ImportError:  # pragma: no cover - 单测直接 import notebook 的场景
+    from log_bridge import get_logger  # type: ignore[no-redef]
+
 __all__ = ["Notebook", "KINDS", "MEDIA_TYPES", "SCHEMA_VERSION"]
 
-LOGGER_NAME = "astrbot_plugin_lifespan_theory.notebook"
 
 # 索引结构变化时 +1；仅用于诊断/未来迁移，不做自动迁移。
 SCHEMA_VERSION = 1
@@ -717,13 +720,13 @@ class Notebook:
         cfg: dict,
         llm_call: Callable[[str, str], Awaitable[str]] | None = None,
         embed_fn: Callable[[list[str]], Awaitable[list[list[float]]]] | None = None,
-        logger: logging.Logger | None = None,
+        logger: Any | None = None,
     ) -> None:
         self.data_dir = Path(data_dir)
         self.cfg = cfg if isinstance(cfg, dict) else {}
         self.llm_call = llm_call
         self.embed_fn = embed_fn
-        self.logger = logger or logging.getLogger(LOGGER_NAME)
+        self.logger = get_logger(logger)
         self._lock = asyncio.Lock()
         self._db_lock = threading.RLock()
         self._bootstrapped = False

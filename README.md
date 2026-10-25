@@ -1,6 +1,6 @@
 # 寿命论（astrbot_plugin_lifespan_theory）
 
-版本 **v1.0.2** · 作者 Dejiko · 需要 AstrBot >= 4.5.0 · 可选 Playwright（本地渲染年报，没有则自动降级 Pillow / 纯 HTML）
+版本 **v1.0.3** · 作者 Dejiko · 需要 AstrBot >= 4.5.0 · 可选 Playwright（本地渲染年报，没有则自动降级 Pillow / 纯 HTML）
 
 给角色设一个出生日期，年龄按真实日历现算；每进入新的年龄档，用 LLM 把人格提示词和年龄综合成这个年龄的「说话方式」，注入对话上下文。除此之外还有两件「她自己的事」：
 
@@ -93,6 +93,7 @@ astrbot_plugin_lifespan_theory/
 ├── extras.py            多角色生日 / 档位锁定 / 注入强度 / 导入导出 / 季节 / 时间线 / 生日特典
 ├── notebook.py          只写小本本：存储、去重、kind、媒体、每日兜底多层压缩、清理
 ├── yearbook.py          生日年报：模板仓库、文案三模式、本地渲染、发送目标计算
+├── log_bridge.py        日志统一入口（只取 AstrBot logger，平台安全审查要求）
 ├── webui.py             年报模板管理页后端 API
 ├── pages/yearbook/      年报模板管理页前端（原生 JS，无 CDN）
 ├── templates/           内置年报模板（minimal / journal / film / birthday）
@@ -311,7 +312,7 @@ AstrBot 插件列表里点开《寿命论》的 **「年报模板」** 页即可
 
 ## 版本记录
 
-完整版本变更见 [CHANGELOG.md](CHANGELOG.md)。当前 **v1.0.2**（作者 Away）：v1.0.0 大版本（只写小本本 / 生日年报 / 年报模板 WebUI / 核心增强），v1.0.1 年报修复，v1.0.2 作者署名修正 + 更新日志。
+完整版本变更见 [CHANGELOG.md](CHANGELOG.md)。当前 **v1.0.3**（作者 Away）：v1.0.0 大版本（只写小本本 / 生日年报 / 年报模板 WebUI / 核心增强），v1.0.1 年报修复，v1.0.2 作者署名修正 + 更新日志，v1.0.3 日志合规整改（安全审查）。
 
 ## 许可
 

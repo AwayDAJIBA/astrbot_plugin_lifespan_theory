@@ -29,7 +29,6 @@ import base64
 import binascii
 import copy
 import json
-import logging
 import re
 from datetime import date, datetime
 from pathlib import Path
@@ -40,7 +39,12 @@ try:  # AstrBot 自带 jinja2；测试环境缺了就降级为「只回显模板
 except Exception:  # pragma: no cover - 只在极端环境触发
     jinja2 = None  # type: ignore[assignment]
 
-LOGGER = logging.getLogger("astrbot_plugin_lifespan_theory.webui")
+try:  # 日志统一走 AstrBot 的 logger（平台安全审查要求，禁止使用标准库日志模块）
+    from .log_bridge import get_logger
+except ImportError:  # pragma: no cover - 单测直接 import webui 的场景
+    from log_bridge import get_logger  # type: ignore[no-redef]
+
+LOGGER = get_logger()
 
 PLUGIN_NAME = "astrbot_plugin_lifespan_theory"
 PAGE_DIR = Path(__file__).parent / "pages" / "yearbook"

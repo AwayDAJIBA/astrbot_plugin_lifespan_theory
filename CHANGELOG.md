@@ -2,6 +2,15 @@
 
 版本遵循语义化版本 `MAJOR.MINOR.PATCH`：MAJOR = 需要迁移配置/行为的重大变化；MINOR = 新功能；PATCH = 修复与文档。
 
+## v1.0.3 — 2026-10-25
+
+### 修复 · 平台安全审查整改
+- 全插件日志统一走 `from astrbot.api import logger`：移除 extras.py / webui.py / notebook.py / yearbook.py
+  对 Python 内置标准库日志模块的引用（含 `getLogger` 兜底）
+- 新增 `log_bridge.py` 作为日志统一入口：main.py 注入 astrbot logger 给各模块；
+  模块兜底也只会取 astrbot logger；脱离 AstrBot 的单测环境退回 NullLogger
+- 发布物新增 `log_bridge.py`（共 22 个文件）
+
 ## v1.0.2 — 2026-10-24
 
 ### 变更
